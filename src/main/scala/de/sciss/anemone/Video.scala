@@ -26,7 +26,8 @@ import processing.video.Capture
 object Video {
   case class Config(device: String = "/dev/video0", listDevices: Boolean = false,
                     deviceWidth: Int = 1920, deviceHeight: Int = 1080, fps: Int = 24,
-                    screenWidth: Int = 1024, screenHeight: Int = 768)
+                    screenWidth: Int = 1024, screenHeight: Int = 768,
+                    x1: Int = -1, y1: Int = -1, x2: Int = -1, y2: Int = -1)
 
   def main(args: Array[String]) = {
     val parser = new scopt.OptionParser[Config]("anemone_15b3c-video") {
@@ -37,6 +38,10 @@ object Video {
       opt[Int   ]('h', "device-height") text "video capture device height" action { case (v, c) => c.copy(deviceHeight = v) }
       opt[Int   ]('W', "screen-width" ) text "output screen width"  action { case (v, c) => c.copy(screenWidth  = v) }
       opt[Int   ]('H', "screen-height") text "output screen height" action { case (v, c) => c.copy(screenHeight = v) }
+      opt[Int   ]("x1") text "first  frame left (-1 = auto)" action { case (v, c) => c.copy(x1 = v) }
+      opt[Int   ]("y1") text "first  frame top  (-1 = auto)" action { case (v, c) => c.copy(y1 = v) }
+      opt[Int   ]("x2") text "second frame left (-1 = auto)" action { case (v, c) => c.copy(x2 = v) }
+      opt[Int   ]("y2") text "second frame top  (-1 = auto)" action { case (v, c) => c.copy(y2 = v) }
     }
     parser.parse(args, Config()).fold(sys.exit(1)) { config =>
       if (config.listDevices) {
@@ -77,6 +82,15 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] val WINDOW_SIZE   = WINDOW_WIDTH * WINDOW_HEIGHT
   private[this] val BUF_SIZE      = WINDOW_SIZE.nextPowerOfTwo
 
+  private[this] val VIDEO_FIT_SCALE = {
+    val hScale  = WINDOW_WIDTH .toFloat / VIDEO_WIDTH
+    val vScale  = WINDOW_HEIGHT.toFloat / VIDEO_HEIGHT
+    math.min(hScale, vScale)
+  }
+
+  private[this] val VIDEO_FIT_W = VIDEO_WIDTH  * VIDEO_FIT_SCALE
+  private[this] val VIDEO_FIT_H = VIDEO_HEIGHT * VIDEO_FIT_SCALE
+
   private[this] val SCAN  = VIDEO_WIDTH - WINDOW_WIDTH
 
   private[this] var cam: Capture = _
@@ -84,10 +98,10 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] val buf2    = new Array[Float](BUF_SIZE)
   private[this] val imgOut  = new PImage(WINDOW_WIDTH, WINDOW_HEIGHT, PConstants.RGB /* ARGB */)
 
-  private[this] var X_START1 = 0
-  private[this] var Y_START1 = (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2
-  private[this] var X_START2 =  VIDEO_WIDTH  - WINDOW_WIDTH
-  private[this] var Y_START2 = (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2
+  private[this] var X_START1 = if (config.x1 < 0) 0 else config.x1.clip(0, VIDEO_WIDTH - WINDOW_WIDTH)
+  private[this] var Y_START1 = if (config.y1 < 0) (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2 else config.y1.clip(0, VIDEO_HEIGHT - WINDOW_HEIGHT)
+  private[this] var X_START2 = if (config.x2 < 0) VIDEO_WIDTH  - WINDOW_WIDTH else config.x1.clip(0, VIDEO_WIDTH - WINDOW_WIDTH)
+  private[this] var Y_START2 = if (config.y2 < 0) (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2 else config.y2.clip(0, VIDEO_HEIGHT - WINDOW_HEIGHT)
 
   private[this] val WAVELET_4  = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB4 )
   private[this] val WAVELET_16 = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB16)
@@ -142,13 +156,13 @@ final class Video(config: Video.Config) extends PApplet {
   def captureEvent(c: Capture): Unit = {
     c.read()
 
-    if (renderMode) renderFrame() else renderAdjustment()
+    if (renderMode) renderFrame() // else renderAdjustment()
     redraw()
   }
 
-  private def renderAdjustment(): Unit = {
-    imgOut.copy(cam, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
-  }
+//  private def renderAdjustment(): Unit = {
+//    imgOut.copy(cam, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+//  }
 
   private def renderFrame(): Unit = {
     crop(xStart = X_START1, yStart = Y_START1, buf = buf1)
@@ -238,17 +252,29 @@ final class Video(config: Video.Config) extends PApplet {
     val h = getHeight
     fill(0f)
     rect(0, 0, w, h)
-    val x = (w - WINDOW_WIDTH ) >> 1
-    val y = (h - WINDOW_HEIGHT) >> 1
-    image(imgOut /* cam */, x, y) // , WINDOW_WIDTH, WINDOW_HEIGHT)
 
-    if (!renderMode) drawAdjustment()
+    if (renderMode) drawRender() else drawAdjustment()
   }
 
   private def red  (): Unit = stroke(0xFF, 0x00, 0x00)
   private def green(): Unit = stroke(0x00, 0xC0, 0x00)
 
+  private def drawRender(): Unit = {
+    val w = getWidth
+    val h = getHeight
+    val x = (w - WINDOW_WIDTH ) >> 1
+    val y = (h - WINDOW_HEIGHT) >> 1
+    image(imgOut, x, y)
+  }
+
   private def drawAdjustment(): Unit = {
+    val w = getWidth
+    val h = getHeight
+    val x = (w - VIDEO_FIT_W) / 2
+    val y = (h - VIDEO_FIT_H) / 2
+    image(cam, x, y, VIDEO_FIT_W, VIDEO_FIT_H)
+
+    scale(VIDEO_FIT_SCALE)
     noFill()
     if (adjustCorner == 0) green() else red()
     line(X_START1, Y_START1, X_START1 + WINDOW_WIDTH - 1, Y_START1)
@@ -264,12 +290,17 @@ final class Video(config: Video.Config) extends PApplet {
     line(X_START2 + WINDOW_WIDTH - 1, Y_START2, X_START2 + WINDOW_WIDTH - 1, Y_START2 + WINDOW_HEIGHT - 1)
   }
 
-  override def keyPressed(e: pe.KeyEvent): Unit = 
+  override def keyPressed(e: pe.KeyEvent): Unit = {
+    if (key == PConstants.ESC) key = 0    // avoid default behaviour of quitting the system
     if (renderMode) keyPressedRender(e) else keyPressedAdjust(e)
-  
+  }
+
   private def keyPressedAdjust(e: pe.KeyEvent): Unit =
     e.getKeyCode match {
-      case KeyEvent.VK_A     => renderMode = true // exit adjustment mode
+      case KeyEvent.VK_A => // exit adjustment mode
+        println(s"--x1 $X_START1 --y1 $Y_START1 --x2 $X_START2 --y2 $Y_START2")
+        renderMode = true
+
       case KeyEvent.VK_SPACE => adjustCorner = (adjustCorner + 1) % 4
       case KeyEvent.VK_LEFT  =>
         adjustCorner match {
@@ -330,8 +361,8 @@ final class Video(config: Video.Config) extends PApplet {
           val sd = gc.getDevice
           sd.setFullScreenWindow(if (sd.getFullScreenWindow == frame) null else frame)
         }
-      // } else if (e.getKeyCode == KeyEvent.VK_Q) {           // quit --- already handled by 'escape'
-      //  sys.exit()
+       } else if (e.getKeyCode == KeyEvent.VK_Q) {
+        sys.exit()
       }
     } else {
       if (e.getKeyCode == KeyEvent.VK_A) {  // enter adjustment mode
