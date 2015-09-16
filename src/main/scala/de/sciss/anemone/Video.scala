@@ -23,7 +23,7 @@ import processing.core.{PApplet, PConstants, PImage}
 import processing.video.Capture
 
 object Video {
-  case class Config(device: String = "/dev/video1", listDevices: Boolean = false, fps: Int = 24)
+  case class Config(device: String = "/dev/video0", listDevices: Boolean = false, fps: Int = 24)
 
   def main(args: Array[String]) = {
     val parser = new scopt.OptionParser[Config]("anemone_15b3c-video") {
