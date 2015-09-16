@@ -15,10 +15,14 @@ licenses           := Seq("GPL v2+" -> url("http://www.gnu.org/licenses/gpl-2.0.
 lazy val processingVersion  = "2.2.1" // "3.0b5" is bullocks, breaks API etc.
 lazy val gstreamerVersion   = "1.5"
 lazy val jnaVersion         = "3.4.0"
+lazy val scissDSPVersion    = "1.2.2"
+lazy val numbersVersion     = "0.1.1"
 
 libraryDependencies ++= Seq(
-  "org.processing" % "video" % processingVersion,   // exclude("net.java.dev.jna", "jna") - doesn't work
-  "com.googlecode.gstreamer-java" % "gstreamer-java" % gstreamerVersion
+  "org.processing"                %  "video"          % processingVersion,   // exclude("net.java.dev.jna", "jna") - doesn't work
+  "com.googlecode.gstreamer-java" %  "gstreamer-java" % gstreamerVersion,
+  "de.sciss"                      %% "scissdsp"       % scissDSPVersion,
+  "de.sciss"                      %% "numbers"        % numbersVersion
 )
 
 dependencyOverrides += "net.java.dev.jna" % "jna" % jnaVersion
