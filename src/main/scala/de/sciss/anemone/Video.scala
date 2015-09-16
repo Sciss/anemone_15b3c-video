@@ -69,6 +69,9 @@ final class Video extends PApplet {
     val pixOut  = imgOut.pixels
     var i       = Y_START * VIDEO_WIDTH + X_START
     var j       = 0
+
+    imgOut.loadPixels()
+
     while (j < WINDOW_SIZE) {
       val k = i + WINDOW_WIDTH
       while (i < k) {
@@ -78,12 +81,15 @@ final class Video extends PApplet {
         val green = (rgbIn & 0x00FF00) >>  8
         val blue  =  rgbIn & 0x0000FF
 
-        val bright = 0.299f * red + 0.587f * green + 0.114f * blue
+        val bright = (0.299f * red + 0.587f * green + 0.114f * blue) / 0xFF
+        // val bright = if (bright0 > 1f) 1f else bright0
         buf(j) = bright
         // ... TODO
         val bi = (bright * 0xFF).toInt
-        val rgbOut = /* 0xFF000000 | */ (bi << 16) | (bi << 8) | bi
+        val rgbOut = 0xFF000000 | (bi << 16) | (bi << 8) | bi
         pixOut(j) = rgbOut
+
+        color(1, 2, 3)
 
         i += 1
         j += 1
