@@ -323,8 +323,10 @@ final class Video(config: Video.Config) extends PApplet {
     val y = (h - VIDEO_FIT_H) / 2
     image(cam, x, y, VIDEO_FIT_W, VIDEO_FIT_H)
 
+    translate(x, y)
     scale(VIDEO_FIT_SCALE)
     noFill()
+    
     if (adjustCorner == 0) green() else red()
     line(X1, Y1, X1 + W1 - 1, Y1)
     line(X1, Y1, X1, Y1 + H1 - 1)
