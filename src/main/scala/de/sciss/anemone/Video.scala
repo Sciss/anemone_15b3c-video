@@ -27,7 +27,8 @@ object Video {
   case class Config(device: String = "/dev/video0", listDevices: Boolean = false,
                     deviceWidth: Int = 1920, deviceHeight: Int = 1080, fps: Int = 24,
                     screenWidth: Int = 1024, screenHeight: Int = 768,
-                    x1: Int = -1, y1: Int = -1, x2: Int = -1, y2: Int = -1)
+                    x1: Int = -1, y1: Int = -1, w1: Int = -1, h1: Int = -1,
+                    x2: Int = -1, y2: Int = -1, w2: Int = -1, h2: Int = -1)
 
   def main(args: Array[String]) = {
     val parser = new scopt.OptionParser[Config]("anemone_15b3c-video") {
@@ -38,10 +39,14 @@ object Video {
       opt[Int   ]('h', "device-height") text "video capture device height" action { case (v, c) => c.copy(deviceHeight = v) }
       opt[Int   ]('W', "screen-width" ) text "output screen width"  action { case (v, c) => c.copy(screenWidth  = v) }
       opt[Int   ]('H', "screen-height") text "output screen height" action { case (v, c) => c.copy(screenHeight = v) }
-      opt[Int   ]("x1") text "first  frame left (-1 = auto)" action { case (v, c) => c.copy(x1 = v) }
-      opt[Int   ]("y1") text "first  frame top  (-1 = auto)" action { case (v, c) => c.copy(y1 = v) }
-      opt[Int   ]("x2") text "second frame left (-1 = auto)" action { case (v, c) => c.copy(x2 = v) }
-      opt[Int   ]("y2") text "second frame top  (-1 = auto)" action { case (v, c) => c.copy(y2 = v) }
+      opt[Int   ]("x1") text "first  frame left   (-1 = auto)" action { case (v, c) => c.copy(x1 = v) }
+      opt[Int   ]("y1") text "first  frame top    (-1 = auto)" action { case (v, c) => c.copy(y1 = v) }
+      opt[Int   ]("w1") text "first  frame width  (-1 = auto)" action { case (v, c) => c.copy(w1 = v) }
+      opt[Int   ]("h1") text "first  frame height (-1 = auto)" action { case (v, c) => c.copy(h1 = v) }
+      opt[Int   ]("x2") text "second frame left   (-1 = auto)" action { case (v, c) => c.copy(x2 = v) }
+      opt[Int   ]("y2") text "second frame top    (-1 = auto)" action { case (v, c) => c.copy(y2 = v) }
+      opt[Int   ]("w2") text "second frame width  (-1 = auto)" action { case (v, c) => c.copy(w2 = v) }
+      opt[Int   ]("h2") text "second frame height (-1 = auto)" action { case (v, c) => c.copy(h2 = v) }
     }
     parser.parse(args, Config()).fold(sys.exit(1)) { config =>
       if (config.listDevices) {
@@ -98,10 +103,14 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] val buf2    = new Array[Float](BUF_SIZE)
   private[this] val imgOut  = new PImage(WINDOW_WIDTH, WINDOW_HEIGHT, PConstants.RGB /* ARGB */)
 
-  private[this] var X_START1 = if (config.x1 < 0) 0 else config.x1.clip(0, VIDEO_WIDTH - WINDOW_WIDTH)
-  private[this] var Y_START1 = if (config.y1 < 0) (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2 else config.y1.clip(0, VIDEO_HEIGHT - WINDOW_HEIGHT)
-  private[this] var X_START2 = if (config.x2 < 0) VIDEO_WIDTH  - WINDOW_WIDTH else config.x1.clip(0, VIDEO_WIDTH - WINDOW_WIDTH)
-  private[this] var Y_START2 = if (config.y2 < 0) (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2 else config.y2.clip(0, VIDEO_HEIGHT - WINDOW_HEIGHT)
+  private[this] var X1 = if (config.x1 < 0) 0 else config.x1
+  private[this] var Y1 = if (config.y1 < 0) (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2 else config.y1
+  private[this] var W1 = if (config.w1 < 0) WINDOW_WIDTH  else config.w1
+  private[this] var H1 = if (config.h1 < 0) WINDOW_HEIGHT else config.h1
+  private[this] var X2 = if (config.x2 < 0) VIDEO_WIDTH  - WINDOW_WIDTH else config.x1
+  private[this] var Y2 = if (config.y2 < 0) (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2 else config.y2
+  private[this] var W2 = if (config.w2 < 0) WINDOW_WIDTH  else config.w2
+  private[this] var H2 = if (config.h2 < 0) WINDOW_HEIGHT else config.h2
 
   private[this] val WAVELET_4  = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB4 )
   private[this] val WAVELET_16 = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB16)
@@ -109,10 +118,23 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] var renderMode = true
 
   private[this] var adjustCorner = 0
+  
+  private def clipFrames(): Unit = {
+    W1  = W1.clip(8, WINDOW_WIDTH )
+    H1  = H1.clip(8, WINDOW_HEIGHT)
+    W2  = W2.clip(8, WINDOW_WIDTH )
+    H2  = H2.clip(8, WINDOW_HEIGHT)
+
+    X1  = X1.clip(0, VIDEO_WIDTH  - W1)
+    Y1  = Y1.clip(0, VIDEO_HEIGHT - H1)
+    X2  = X2.clip(0, VIDEO_WIDTH  - W2)
+    Y2  = Y2.clip(0, VIDEO_HEIGHT - H2)
+  }
 
   override def init(): Unit = {
     super.init()
     setPreferredSize(new Dimension(WINDOW_WIDTH, WINDOW_HEIGHT))
+    clipFrames()
   }
 
   override def setup(): Unit = {
@@ -123,7 +145,32 @@ final class Video(config: Video.Config) extends PApplet {
     imgOut.loadPixels()
   }
 
-  private[this] def crop(xStart: Int, yStart: Int, buf: Array[Float]): Unit = {
+  private[this] def crop(x: Int, y: Int, w: Int, h: Int, buf: Array[Float]): Unit = {
+    imgOut.copy(cam, x, y, w, h, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+    imgOut.loadPixels()
+    val pixIn = imgOut.pixels
+
+    // ---- copy gray-scale image to buffer ----
+    var j = 0
+    while (j < WINDOW_SIZE) {
+      val rgbIn = pixIn(j)
+      // pix(i) = pix(i) ^ 0xFFFFFF
+      val red   = (rgbIn & 0xFF0000) >> 16
+      val green = (rgbIn & 0x00FF00) >>  8
+      val blue  =  rgbIn & 0x0000FF
+
+      val bright = (0.299f * red + 0.587f * green + 0.114f * blue) / 0xFF
+      // val bright = if (bright0 > 1f) 1f else bright0
+      buf(j) = bright
+      j += 1
+    }
+    while (j < BUF_SIZE) {
+      buf(j) = 0f
+      j += 1
+    }
+  }
+
+  private[this] def cropOLD(xStart: Int, yStart: Int, buf: Array[Float]): Unit = {
     val pixIn = cam.pixels
 
     // ---- copy gray-scale image to buffer ----
@@ -165,8 +212,8 @@ final class Video(config: Video.Config) extends PApplet {
 //  }
 
   private def renderFrame(): Unit = {
-    crop(xStart = X_START1, yStart = Y_START1, buf = buf1)
-    crop(xStart = X_START2, yStart = Y_START2, buf = buf2)
+    crop(x = X1, y = Y1, w = W1, h = H1, buf = buf1)
+    crop(x = X2, y = Y2, w = W2, h = H2, buf = buf2)
 
     Wavelet.fwdTransform(buf1, BUF_SIZE, WAVELET_4)
     Wavelet.fwdTransform(buf2, BUF_SIZE, WAVELET_4)
@@ -232,6 +279,7 @@ final class Video(config: Video.Config) extends PApplet {
     }
 
     // ---- copy buffer to p-image ----
+    imgOut.loadPixels()
     val pixOut  = imgOut.pixels
     var j = 0
     while (j < WINDOW_SIZE) {
@@ -251,6 +299,7 @@ final class Video(config: Video.Config) extends PApplet {
     val w = getWidth
     val h = getHeight
     fill(0f)
+    noStroke()
     rect(0, 0, w, h)
 
     if (renderMode) drawRender() else drawAdjustment()
@@ -277,17 +326,17 @@ final class Video(config: Video.Config) extends PApplet {
     scale(VIDEO_FIT_SCALE)
     noFill()
     if (adjustCorner == 0) green() else red()
-    line(X_START1, Y_START1, X_START1 + WINDOW_WIDTH - 1, Y_START1)
-    line(X_START1, Y_START1, X_START1, Y_START1 + WINDOW_HEIGHT - 1)
+    line(X1, Y1, X1 + W1 - 1, Y1)
+    line(X1, Y1, X1, Y1 + H1 - 1)
     if (adjustCorner == 1) green() else red()
-    line(X_START1, Y_START1 + WINDOW_HEIGHT - 1, X_START1 + WINDOW_WIDTH - 1, Y_START1 + WINDOW_HEIGHT - 1)
-    line(X_START1 + WINDOW_WIDTH - 1, Y_START1, X_START1 + WINDOW_WIDTH - 1, Y_START1 + WINDOW_HEIGHT - 1)
+    line(X1, Y1 + H1 - 1, X1 + W1 - 1, Y1 + H1 - 1)
+    line(X1 + W1 - 1, Y1, X1 + W1 - 1, Y1 + H1 - 1)
     if (adjustCorner == 2) green() else red()
-    line(X_START2, Y_START2, X_START2 + WINDOW_WIDTH - 1, Y_START2)
-    line(X_START2, Y_START2, X_START2, Y_START2 + WINDOW_HEIGHT - 1)
+    line(X2, Y2, X2 + W2 - 1, Y2)
+    line(X2, Y2, X2, Y2 + H2 - 1)
     if (adjustCorner == 3) green() else red()
-    line(X_START2, Y_START2 + WINDOW_HEIGHT - 1, X_START2 + WINDOW_WIDTH - 1, Y_START2 + WINDOW_HEIGHT - 1)
-    line(X_START2 + WINDOW_WIDTH - 1, Y_START2, X_START2 + WINDOW_WIDTH - 1, Y_START2 + WINDOW_HEIGHT - 1)
+    line(X2, Y2 + H2 - 1, X2 + W2 - 1, Y2 + H2 - 1)
+    line(X2 + W2 - 1, Y2, X2 + W2 - 1, Y2 + H2 - 1)
   }
 
   override def keyPressed(e: pe.KeyEvent): Unit = {
@@ -295,64 +344,51 @@ final class Video(config: Video.Config) extends PApplet {
     if (renderMode) keyPressedRender(e) else keyPressedAdjust(e)
   }
 
-  private def keyPressedAdjust(e: pe.KeyEvent): Unit =
+  private def keyPressedAdjust(e: pe.KeyEvent): Unit = {
+    val amt = if (e.isShiftDown) 4 else 1
     e.getKeyCode match {
       case KeyEvent.VK_A => // exit adjustment mode
-        println(s"--x1 $X_START1 --y1 $Y_START1 --x2 $X_START2 --y2 $Y_START2")
+        println(s"--x1 $X1 --y1 $Y1 --w1 $W1 --h1 $H1 --x2 $X2 --y2 $Y2 --w2 $W2 --h2 $H2")
         renderMode = true
 
       case KeyEvent.VK_SPACE => adjustCorner = (adjustCorner + 1) % 4
       case KeyEvent.VK_LEFT  =>
         adjustCorner match {
-          case 0 => // first  left/top
-            X_START1 = math.max(0, X_START1 - 1)
-          case 1 => // first  bottom/right
-            // XXX TODO
-          case 2 => // second left/top
-            X_START2 = math.max(0, X_START2 - 1)
-          case 3 => // second bottom/right
-          // XXX TODO
+          case 0 => X1 -= amt // first  left/top
+          case 1 => W1 -= amt // first  bottom/right
+          case 2 => X2 -= amt // second left/top
+          case 3 => W2 -= amt // second bottom/right
         }
 
       case KeyEvent.VK_RIGHT =>
         adjustCorner match {
-          case 0 => // first  left/top
-            X_START1 = math.min(VIDEO_WIDTH - WINDOW_WIDTH, X_START1 + 1)
-          case 1 => // first  bottom/right
-          // XXX TODO
-          case 2 => // second left/top
-            X_START2 = math.min(VIDEO_WIDTH - WINDOW_WIDTH, X_START2 + 1)
-          case 3 => // second bottom/right
-          // XXX TODO
+          case 0 => X1 += amt // first  left/top
+          case 1 => W1 += amt // first  bottom/right
+          case 2 => X2 += amt // second left/top
+          case 3 => W2 += amt // second bottom/right
         }
 
-      case KeyEvent.VK_UP    =>
+      case KeyEvent.VK_UP =>
         adjustCorner match {
-          case 0 => // first  left/top
-            Y_START1 = math.max(0, Y_START1 - 1)
-          case 1 => // first  bottom/right
-          // XXX TODO
-          case 2 => // second left/top
-            Y_START2 = math.max(0, Y_START2 - 1)
-          case 3 => // second bottom/right
-          // XXX TODO
+          case 0 => Y1 -= amt // first  left/top
+          case 1 => H1 -= amt // first  bottom/right
+          case 2 => Y2 -= amt // second left/top
+          case 3 => H2 -= amt // second bottom/right
         }
 
       case KeyEvent.VK_DOWN  =>
         adjustCorner match {
-          case 0 => // first  left/top
-            Y_START1 = math.min(VIDEO_HEIGHT - WINDOW_HEIGHT, Y_START1 + 1)
-          case 1 => // first  bottom/right
-          // XXX TODO
-          case 2 => // second left/top
-            Y_START2 = math.min(VIDEO_HEIGHT - WINDOW_HEIGHT, Y_START2 + 1)
-          case 3 => // second bottom/right
-          // XXX TODO
+          case 0 => Y1 += amt // first  left/top
+          case 1 => H1 += amt // first  bottom/right
+          case 2 => Y2 += amt // second left/top
+          case 3 => H2 += amt // second bottom/right
         }
 
       case _ =>
     }
-
+    clipFrames()
+  }
+    
   private def keyPressedRender(e: pe.KeyEvent): Unit =
     if (e.isControlDown) {
       if (e.getKeyCode == KeyEvent.VK_F && e.isShiftDown) { // toggle full-screen
