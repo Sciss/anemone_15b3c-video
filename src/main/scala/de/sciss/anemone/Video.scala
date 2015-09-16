@@ -13,23 +13,30 @@
 
 package de.sciss.anemone
 
-import java.awt.event.{KeyAdapter, KeyEvent}
+import java.awt.event.KeyEvent
 import java.awt.{Dimension, EventQueue}
 import javax.swing.WindowConstants
 
 import de.sciss.fscape.spect.Wavelet
 import de.sciss.numbers
+import processing.{event => pe}
 import processing.core.{PApplet, PConstants, PImage}
 import processing.video.Capture
 
 object Video {
-  case class Config(device: String = "/dev/video0", listDevices: Boolean = false, fps: Int = 24)
+  case class Config(device: String = "/dev/video0", listDevices: Boolean = false,
+                    deviceWidth: Int = 1920, deviceHeight: Int = 1080, fps: Int = 24,
+                    screenWidth: Int = 1024, screenHeight: Int = 768)
 
   def main(args: Array[String]) = {
     val parser = new scopt.OptionParser[Config]("anemone_15b3c-video") {
       opt[Unit  ]('l', "list"  ) text "list video capture devices" action { case (_, c) => c.copy(listDevices = true) }
       opt[String]('d', "device") text "video capture device" action { case (v, c) => c.copy(device = v) }
       opt[Int   ]('r', "fps"   ) text "frames per second" action { (v, c) => c.copy(fps = v) }
+      opt[Int   ]('w', "device-width" ) text "video capture device width"  action { case (v, c) => c.copy(deviceWidth  = v) }
+      opt[Int   ]('h', "device-height") text "video capture device height" action { case (v, c) => c.copy(deviceHeight = v) }
+      opt[Int   ]('W', "screen-width" ) text "output screen width"  action { case (v, c) => c.copy(screenWidth  = v) }
+      opt[Int   ]('H', "screen-height") text "output screen height" action { case (v, c) => c.copy(screenHeight = v) }
     }
     parser.parse(args, Config()).fold(sys.exit(1)) { config =>
       if (config.listDevices) {
@@ -47,26 +54,26 @@ object Video {
     val sketch = new Video(config)
     val frame = new javax.swing.JFrame("Anemone")
     frame.getContentPane.add(sketch)
-    sketch.init()
     frame.setUndecorated(true)
     frame.setResizable(false)
     frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE)
+    sketch.frame = frame
+    sketch.init()
     frame.pack()
     frame.setVisible(true)
-    sketch.installFullScreenKey(frame)
   }
 }
 final class Video(config: Video.Config) extends PApplet {
   import numbers.Implicits._
 
-  private[this] val VIDEO_WIDTH   = 1920
-  private[this] val VIDEO_HEIGHT  = 1080
+  private[this] val VIDEO_WIDTH   = config.deviceWidth  // 1920
+  private[this] val VIDEO_HEIGHT  = config.deviceHeight // 1080
   private[this] val VIDEO_FPS     = config.fps // 24 // 30
   private[this] val VIDEO_DEVICE  = config.device
   // private[this] val VIDEO_SIZE    = VIDEO_WIDTH * VIDEO_HEIGHT
 
-  private[this] val WINDOW_WIDTH  = 1024 // VIDEO_WIDTH  / 2
-  private[this] val WINDOW_HEIGHT =  768 // VIDEO_HEIGHT / 2
+  private[this] val WINDOW_WIDTH  = math.min(VIDEO_WIDTH , config.screenWidth ) // VIDEO_WIDTH  / 2
+  private[this] val WINDOW_HEIGHT = math.min(VIDEO_HEIGHT, config.screenHeight) // VIDEO_HEIGHT / 2
   private[this] val WINDOW_SIZE   = WINDOW_WIDTH * WINDOW_HEIGHT
   private[this] val BUF_SIZE      = WINDOW_SIZE.nextPowerOfTwo
 
@@ -77,13 +84,17 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] val buf2    = new Array[Float](BUF_SIZE)
   private[this] val imgOut  = new PImage(WINDOW_WIDTH, WINDOW_HEIGHT, PConstants.RGB /* ARGB */)
 
-  private[this] val X_START1 = 0
-  private[this] val Y_START1 = (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2
-  private[this] val X_START2 =  VIDEO_WIDTH  - WINDOW_WIDTH
-  private[this] val Y_START2 = (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2
+  private[this] var X_START1 = 0
+  private[this] var Y_START1 = (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2
+  private[this] var X_START2 =  VIDEO_WIDTH  - WINDOW_WIDTH
+  private[this] var Y_START2 = (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2
 
   private[this] val WAVELET_4  = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB4 )
   private[this] val WAVELET_16 = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB16)
+
+  private[this] var renderMode = true
+
+  private[this] var adjustCorner = 0
 
   override def init(): Unit = {
     super.init()
@@ -101,7 +112,7 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] def crop(xStart: Int, yStart: Int, buf: Array[Float]): Unit = {
     val pixIn = cam.pixels
 
-    // ---- copy grayscale image to buffer ----
+    // ---- copy gray-scale image to buffer ----
     var i       = yStart * VIDEO_WIDTH + xStart
     var j       = 0
     while (j < WINDOW_SIZE) {
@@ -131,6 +142,15 @@ final class Video(config: Video.Config) extends PApplet {
   def captureEvent(c: Capture): Unit = {
     c.read()
 
+    if (renderMode) renderFrame() else renderAdjustment()
+    redraw()
+  }
+
+  private def renderAdjustment(): Unit = {
+    imgOut.copy(cam, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+  }
+
+  private def renderFrame(): Unit = {
     crop(xStart = X_START1, yStart = Y_START1, buf = buf1)
     crop(xStart = X_START2, yStart = Y_START2, buf = buf2)
 
@@ -210,7 +230,6 @@ final class Video(config: Video.Config) extends PApplet {
       j += 1
     }
     imgOut.updatePixels()
-    redraw()
   }
 
   override def draw(): Unit = {
@@ -222,19 +241,103 @@ final class Video(config: Video.Config) extends PApplet {
     val x = (w - WINDOW_WIDTH ) >> 1
     val y = (h - WINDOW_HEIGHT) >> 1
     image(imgOut /* cam */, x, y) // , WINDOW_WIDTH, WINDOW_HEIGHT)
+
+    if (!renderMode) drawAdjustment()
   }
 
-  def installFullScreenKey(frame: java.awt.Window): Unit = {
-    addKeyListener(new KeyAdapter {
-      override def keyPressed(e: KeyEvent): Unit = if (e.isControlDown) {
-        if (e.getKeyCode == KeyEvent.VK_F && e.isShiftDown) {
+  private def red  (): Unit = stroke(0xFF, 0x00, 0x00)
+  private def green(): Unit = stroke(0x00, 0xC0, 0x00)
+
+  private def drawAdjustment(): Unit = {
+    noFill()
+    if (adjustCorner == 0) green() else red()
+    line(X_START1, Y_START1, X_START1 + WINDOW_WIDTH - 1, Y_START1)
+    line(X_START1, Y_START1, X_START1, Y_START1 + WINDOW_HEIGHT - 1)
+    if (adjustCorner == 1) green() else red()
+    line(X_START1, Y_START1 + WINDOW_HEIGHT - 1, X_START1 + WINDOW_WIDTH - 1, Y_START1 + WINDOW_HEIGHT - 1)
+    line(X_START1 + WINDOW_WIDTH - 1, Y_START1, X_START1 + WINDOW_WIDTH - 1, Y_START1 + WINDOW_HEIGHT - 1)
+    if (adjustCorner == 2) green() else red()
+    line(X_START2, Y_START2, X_START2 + WINDOW_WIDTH - 1, Y_START2)
+    line(X_START2, Y_START2, X_START2, Y_START2 + WINDOW_HEIGHT - 1)
+    if (adjustCorner == 3) green() else red()
+    line(X_START2, Y_START2 + WINDOW_HEIGHT - 1, X_START2 + WINDOW_WIDTH - 1, Y_START2 + WINDOW_HEIGHT - 1)
+    line(X_START2 + WINDOW_WIDTH - 1, Y_START2, X_START2 + WINDOW_WIDTH - 1, Y_START2 + WINDOW_HEIGHT - 1)
+  }
+
+  override def keyPressed(e: pe.KeyEvent): Unit = 
+    if (renderMode) keyPressedRender(e) else keyPressedAdjust(e)
+  
+  private def keyPressedAdjust(e: pe.KeyEvent): Unit =
+    e.getKeyCode match {
+      case KeyEvent.VK_A     => renderMode = true // exit adjustment mode
+      case KeyEvent.VK_SPACE => adjustCorner = (adjustCorner + 1) % 4
+      case KeyEvent.VK_LEFT  =>
+        adjustCorner match {
+          case 0 => // first  left/top
+            X_START1 = math.max(0, X_START1 - 1)
+          case 1 => // first  bottom/right
+            // XXX TODO
+          case 2 => // second left/top
+            X_START2 = math.max(0, X_START2 - 1)
+          case 3 => // second bottom/right
+          // XXX TODO
+        }
+
+      case KeyEvent.VK_RIGHT =>
+        adjustCorner match {
+          case 0 => // first  left/top
+            X_START1 = math.min(VIDEO_WIDTH - WINDOW_WIDTH, X_START1 + 1)
+          case 1 => // first  bottom/right
+          // XXX TODO
+          case 2 => // second left/top
+            X_START2 = math.min(VIDEO_WIDTH - WINDOW_WIDTH, X_START2 + 1)
+          case 3 => // second bottom/right
+          // XXX TODO
+        }
+
+      case KeyEvent.VK_UP    =>
+        adjustCorner match {
+          case 0 => // first  left/top
+            Y_START1 = math.max(0, Y_START1 - 1)
+          case 1 => // first  bottom/right
+          // XXX TODO
+          case 2 => // second left/top
+            Y_START2 = math.max(0, Y_START2 - 1)
+          case 3 => // second bottom/right
+          // XXX TODO
+        }
+
+      case KeyEvent.VK_DOWN  =>
+        adjustCorner match {
+          case 0 => // first  left/top
+            Y_START1 = math.min(VIDEO_HEIGHT - WINDOW_HEIGHT, Y_START1 + 1)
+          case 1 => // first  bottom/right
+          // XXX TODO
+          case 2 => // second left/top
+            Y_START2 = math.min(VIDEO_HEIGHT - WINDOW_HEIGHT, Y_START2 + 1)
+          case 3 => // second bottom/right
+          // XXX TODO
+        }
+
+      case _ =>
+    }
+
+  private def keyPressedRender(e: pe.KeyEvent): Unit =
+    if (e.isControlDown) {
+      if (e.getKeyCode == KeyEvent.VK_F && e.isShiftDown) { // toggle full-screen
+        if (frame != null) {
           val gc = frame.getGraphicsConfiguration
           val sd = gc.getDevice
           sd.setFullScreenWindow(if (sd.getFullScreenWindow == frame) null else frame)
-        } else if (e.getKeyCode == KeyEvent.VK_Q) {
-          sys.exit()
         }
+      // } else if (e.getKeyCode == KeyEvent.VK_Q) {           // quit --- already handled by 'escape'
+      //  sys.exit()
       }
-    })
-  }
+    } else {
+      if (e.getKeyCode == KeyEvent.VK_A) {  // enter adjustment mode
+        renderMode = false
+      }
+    }
+
+  // def installFullScreenKey(frame: java.awt.Frame): Unit = this.frame = frame
 }
