@@ -16,36 +16,45 @@ package de.sciss.anemone
 import java.awt.{Dimension, EventQueue}
 import javax.swing.WindowConstants
 
-import processing.core.PApplet
+import processing.core.{PConstants, PImage, PApplet}
 import processing.video.Capture
 
 object Video extends Runnable {
   def main(args: Array[String]) = EventQueue.invokeAndWait(this)
-
-  val VIDEO_WIDTH   = 1920
-  val VIDEO_HEIGHT  = 1080
-  val VIDEO_FPS     = 30
-  val VIDEO_DEVICE  = "/dev/video1"
-
-  val WINDOW_WIDTH  = VIDEO_WIDTH  / 2
-  val WINDOW_HEIGHT = VIDEO_HEIGHT / 2
 
   def run(): Unit = {
     val sketch = new Video
     val frame = new javax.swing.JFrame("Anemone")
     frame.getContentPane.add(sketch)
     sketch.init()
-    sketch.setPreferredSize(new Dimension(WINDOW_WIDTH, WINDOW_HEIGHT))
     frame.setResizable(false)
     frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE)
     frame.pack()
     frame.setVisible(true)
   }
 }
-class Video extends PApplet {
-  import Video._
+final class Video extends PApplet {
+  private[this] val VIDEO_WIDTH   = 1920
+  private[this] val VIDEO_HEIGHT  = 1080
+  private[this] val VIDEO_FPS     = 30
+  private[this] val VIDEO_DEVICE  = "/dev/video1"
+  private[this] val VIDEO_SIZE    = VIDEO_WIDTH * VIDEO_HEIGHT
 
-  var cam: Capture = _
+  private[this] val WINDOW_WIDTH  = 1024 // VIDEO_WIDTH  / 2
+  private[this] val WINDOW_HEIGHT =  768 // VIDEO_HEIGHT / 2
+  private[this] val WINDOW_SIZE   = WINDOW_WIDTH * WINDOW_HEIGHT
+
+  private[this] var cam: Capture = _
+  private[this] val buf     = new Array[Float](WINDOW_WIDTH * WINDOW_HEIGHT)
+  private[this] val imgOut  = new PImage(WINDOW_WIDTH, WINDOW_HEIGHT, PConstants.RGB /* ARGB */)
+
+  private[this] val X_START = (VIDEO_WIDTH  - WINDOW_WIDTH) / 2    // XXX TODO -- parametrise
+  private[this] val Y_START = (VIDEO_HEIGHT - WINDOW_WIDTH) / 2    // XXX TODO -- parametrise
+
+  override def init(): Unit = {
+    super.init()
+    setPreferredSize(new Dimension(WINDOW_WIDTH, WINDOW_HEIGHT))
+  }
 
   override def setup(): Unit = {
     size(WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -56,12 +65,39 @@ class Video extends PApplet {
 
   def captureEvent(c: Capture): Unit = {
     c.read()
+    val pixIn   = c.pixels
+    val pixOut  = imgOut.pixels
+    var i       = Y_START * VIDEO_WIDTH + X_START
+    var j       = 0
+    while (j < WINDOW_SIZE) {
+      val k = i + WINDOW_WIDTH
+      while (i < k) {
+        val rgbIn = pixIn(i)
+        // pix(i) = pix(i) ^ 0xFFFFFF
+        val red   = (rgbIn & 0xFF0000) >> 16
+        val green = (rgbIn & 0x00FF00) >>  8
+        val blue  =  rgbIn & 0x0000FF
+
+        val bright = 0.299f * red + 0.587f * green + 0.114f * blue
+        buf(j) = bright
+        // ... TODO
+        val bi = (bright * 0xFF).toInt
+        val rgbOut = /* 0xFF000000 | */ (bi << 16) | (bi << 8) | bi
+        pixOut(j) = rgbOut
+
+        i += 1
+        j += 1
+      }
+      i += VIDEO_WIDTH - WINDOW_WIDTH // next scan
+    }
+
+    imgOut.updatePixels()
     redraw()
   }
 
   override def draw(): Unit = {
     // if (cam.available()) cam.read()
 
-    image(cam, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+    image(imgOut /* cam */, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
   }
 }
