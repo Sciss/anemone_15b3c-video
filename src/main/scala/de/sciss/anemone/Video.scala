@@ -13,8 +13,9 @@
 
 package de.sciss.anemone
 
-import java.awt.{Dimension, EventQueue}
-import javax.swing.WindowConstants
+import java.awt.event.{KeyAdapter, ActionEvent, InputEvent, KeyEvent}
+import java.awt.{Toolkit, Dimension, EventQueue}
+import javax.swing.{AbstractAction, KeyStroke, JComponent, WindowConstants}
 
 import de.sciss.fscape.spect.Wavelet
 import de.sciss.numbers
@@ -29,10 +30,12 @@ object Video extends Runnable {
     val frame = new javax.swing.JFrame("Anemone")
     frame.getContentPane.add(sketch)
     sketch.init()
+    frame.setUndecorated(true)
     frame.setResizable(false)
     frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE)
     frame.pack()
     frame.setVisible(true)
+    sketch.installFullScreenKey(frame)
   }
 }
 final class Video extends PApplet {
@@ -124,7 +127,14 @@ final class Video extends PApplet {
       // if (buf1(i) > MAX) MAX = buf1(i)
       // if (buf1(i) < MIN) MIN = buf1(i)
       // buf1(i) *= buf2(i) * gain
-      buf1(i) = math.max(buf1(i), buf2(i))
+
+      // buf1(i) = math.max(buf1(i), buf2(i))
+      // buf1(i) = math.max(buf1(i), buf2(i)) - math.min(buf1(i), buf2(i))
+      // buf1(i) = buf1(i).toInt ^ buf2(i).toInt
+      // buf1(i) = (buf1(i) atan2 buf2(i)) * 0.25f
+      // buf1(i) = (buf1(i) hypot buf2(i))
+      // buf1(i) = (buf1(i) hypotx buf2(i))  // !
+      if (i % 2 == 0) buf1(i) = buf2(i)
       i += 1
     }
     // println(s"MIN = $MIN, MAX = $MAX")
@@ -133,6 +143,41 @@ final class Video extends PApplet {
 
     //    Wavelet.fwdTransform(buf, BUF_SIZE, WAVELET_16)
 //    Wavelet.invTransform(buf, BUF_SIZE, WAVELET_4 )
+
+    // ---- normalize ----
+    val NORMALIZE = false
+
+    if (NORMALIZE) {
+      i = 1
+      var MIN = buf1(0)
+      var MAX = buf1(0)
+      while (i < WINDOW_SIZE) {
+        val x = buf1(i)
+        if (x < MIN) MIN = x
+        if (x > MAX) MAX = x
+        i += 1
+      }
+      // println(s"MIN = $MIN, MAX = $MAX")
+      if (MIN < MAX) {
+        i = 0
+        val off   = -MIN
+        val scale = 1.0f / (MAX - MIN)
+        while (i < WINDOW_SIZE) {
+          buf1(i) = (buf1(i) + off) * scale
+          i += 1
+        }
+      }
+    }
+
+    val NOISE = 0.1f
+
+    if (NOISE > 0f) {
+      i = 1
+      while (i < WINDOW_SIZE) {
+        buf1(i) += (java.lang.Math.random().toFloat - 0.5f) * NOISE
+        i += 1
+      }
+    }
 
     // ---- copy buffer to p-image ----
     val pixOut  = imgOut.pixels
@@ -152,7 +197,26 @@ final class Video extends PApplet {
 
   override def draw(): Unit = {
     // if (cam.available()) cam.read()
+    val w = getWidth
+    val h = getHeight
+    fill(0f)
+    rect(0, 0, w, h)
+    val x = (w - WINDOW_WIDTH ) >> 1
+    val y = (h - WINDOW_HEIGHT) >> 1
+    image(imgOut /* cam */, x, y) // , WINDOW_WIDTH, WINDOW_HEIGHT)
+  }
 
-    image(imgOut /* cam */, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+  def installFullScreenKey(frame: java.awt.Window): Unit = {
+    addKeyListener(new KeyAdapter {
+      override def keyPressed(e: KeyEvent): Unit = if (e.isControlDown) {
+        if (e.getKeyCode == KeyEvent.VK_F && e.isShiftDown) {
+          val gc = frame.getGraphicsConfiguration
+          val sd = gc.getDevice
+          sd.setFullScreenWindow(if (sd.getFullScreenWindow == frame) null else frame)
+        } else if (e.getKeyCode == KeyEvent.VK_Q) {
+          sys.exit()
+        }
+      }
+    })
   }
 }
