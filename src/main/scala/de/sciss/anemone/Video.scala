@@ -13,20 +13,38 @@
 
 package de.sciss.anemone
 
-import java.awt.event.{KeyAdapter, ActionEvent, InputEvent, KeyEvent}
-import java.awt.{Toolkit, Dimension, EventQueue}
-import javax.swing.{AbstractAction, KeyStroke, JComponent, WindowConstants}
+import java.awt.event.{KeyAdapter, KeyEvent}
+import java.awt.{Dimension, EventQueue}
+import javax.swing.WindowConstants
 
 import de.sciss.fscape.spect.Wavelet
 import de.sciss.numbers
-import processing.core.{PConstants, PImage, PApplet}
+import processing.core.{PApplet, PConstants, PImage}
 import processing.video.Capture
 
-object Video extends Runnable {
-  def main(args: Array[String]) = EventQueue.invokeAndWait(this)
+object Video {
+  case class Config(device: String = "/dev/video1", listDevices: Boolean = false, fps: Int = 24)
 
-  def run(): Unit = {
-    val sketch = new Video
+  def main(args: Array[String]) = {
+    val parser = new scopt.OptionParser[Config]("anemone_15b3c-video") {
+      opt[Unit  ]('l', "list"  ) text "list video capture devices" action { case (_, c) => c.copy(listDevices = true) }
+      opt[String]('d', "device") text "video capture device" action { case (v, c) => c.copy(device = v) }
+      opt[Int   ]('r', "fps"   ) text "frames per second" action { (v, c) => c.copy(fps = v) }
+    }
+    parser.parse(args, Config()).fold(sys.exit(1)) { config =>
+      if (config.listDevices) {
+        println("---- video devices found: ----")
+        Capture.list().foreach(println)
+        sys.exit()
+      }
+      EventQueue.invokeLater(new Runnable {
+        def run(): Unit = Video.run(config)
+      })
+    }
+  }
+
+  private def run(config: Config): Unit = {
+    val sketch = new Video(config)
     val frame = new javax.swing.JFrame("Anemone")
     frame.getContentPane.add(sketch)
     sketch.init()
@@ -38,13 +56,13 @@ object Video extends Runnable {
     sketch.installFullScreenKey(frame)
   }
 }
-final class Video extends PApplet {
+final class Video(config: Video.Config) extends PApplet {
   import numbers.Implicits._
 
   private[this] val VIDEO_WIDTH   = 1920
   private[this] val VIDEO_HEIGHT  = 1080
-  private[this] val VIDEO_FPS     = 24 // 30
-  private[this] val VIDEO_DEVICE  = "/dev/video1"
+  private[this] val VIDEO_FPS     = config.fps // 24 // 30
+  private[this] val VIDEO_DEVICE  = config.device
   // private[this] val VIDEO_SIZE    = VIDEO_WIDTH * VIDEO_HEIGHT
 
   private[this] val WINDOW_WIDTH  = 1024 // VIDEO_WIDTH  / 2
