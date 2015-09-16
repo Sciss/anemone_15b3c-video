@@ -118,7 +118,12 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] var renderMode = true
 
   private[this] var adjustCorner = 0
-  
+
+  private[this] var NORMALIZE = false
+  private[this] var ALGORITHM = 0
+  private[this] val NUM_ALGORITHMS = 6
+  private[this] var NOISE = 0.1f
+
   private def clipFrames(): Unit = {
     W1  = W1.clip(8, WINDOW_WIDTH )
     H1  = H1.clip(8, WINDOW_HEIGHT)
@@ -219,23 +224,43 @@ final class Video(config: Video.Config) extends PApplet {
     Wavelet.fwdTransform(buf2, BUF_SIZE, WAVELET_4)
 
     var i = 0
+    ALGORITHM match {
+      case 0 =>
+        while (i < BUF_SIZE) {
+          buf1(i) = math.max(buf1(i), buf2(i))
+          // buf1(i) = math.max(buf1(i), buf2(i)) - math.min(buf1(i), buf2(i))
+          i += 1
+        }
+      case 1 =>
+        while (i < BUF_SIZE) {
+          buf1(i) = buf1(i).toInt ^ buf2(i).toInt
+          i += 1
+        }
+      case 2 =>
+        while (i < BUF_SIZE) {
+          buf1(i) = (buf1(i) atan2 buf2(i)) * 0.25f
+          i += 1
+        }
+      case 3 =>
+        while (i < BUF_SIZE) {
+          buf1(i) = buf1(i) hypotx buf2(i)  // !
+          i += 1
+        }
+      case 4 =>
+        while (i < BUF_SIZE) {
+          if (i % 2 == 0) buf1(i) = buf2(i)
+          i += 1
+        }
+      case 5 =>
+        while (i < BUF_SIZE) {
+          buf1(i) = math.max(buf1(i), buf2(i)) - math.min(buf1(i), buf2(i))
+          i += 1
+        }
+      case _ =>
+    }
     // var MIN = Float.PositiveInfinity
     // var MAX = Float.NegativeInfinity
     // val gain = (1.0f / BUF_SIZE).sqrt
-    while (i < BUF_SIZE) {
-      // if (buf1(i) > MAX) MAX = buf1(i)
-      // if (buf1(i) < MIN) MIN = buf1(i)
-      // buf1(i) *= buf2(i) * gain
-
-      // buf1(i) = math.max(buf1(i), buf2(i))
-      // buf1(i) = math.max(buf1(i), buf2(i)) - math.min(buf1(i), buf2(i))
-      // buf1(i) = buf1(i).toInt ^ buf2(i).toInt
-      // buf1(i) = (buf1(i) atan2 buf2(i)) * 0.25f
-      // buf1(i) = (buf1(i) hypot buf2(i))
-      // buf1(i) = (buf1(i) hypotx buf2(i))  // !
-      if (i % 2 == 0) buf1(i) = buf2(i)
-      i += 1
-    }
     // println(s"MIN = $MIN, MAX = $MAX")
 
     Wavelet.invTransform(buf1, BUF_SIZE, WAVELET_4)
@@ -244,8 +269,6 @@ final class Video(config: Video.Config) extends PApplet {
 //    Wavelet.invTransform(buf, BUF_SIZE, WAVELET_4 )
 
     // ---- normalize ----
-    val NORMALIZE = false
-
     if (NORMALIZE) {
       i = 1
       var MIN = buf1(0)
@@ -267,8 +290,6 @@ final class Video(config: Video.Config) extends PApplet {
         }
       }
     }
-
-    val NOISE = 0.1f
 
     if (NOISE > 0f) {
       i = 1
@@ -326,7 +347,7 @@ final class Video(config: Video.Config) extends PApplet {
     translate(x, y)
     scale(VIDEO_FIT_SCALE)
     noFill()
-    
+
     if (adjustCorner == 0) green() else red()
     line(X1, Y1, X1 + W1 - 1, Y1)
     line(X1, Y1, X1, Y1 + H1 - 1)
@@ -403,8 +424,24 @@ final class Video(config: Video.Config) extends PApplet {
         sys.exit()
       }
     } else {
-      if (e.getKeyCode == KeyEvent.VK_A) {  // enter adjustment mode
-        renderMode = false
+      e.getKeyCode match {
+        case KeyEvent.VK_A     => renderMode = false  // enter adjustment mode
+        case KeyEvent.VK_N     =>
+          NORMALIZE = !NORMALIZE
+          println(s"normalize = ${if (NORMALIZE) "on" else "off"}")
+        case KeyEvent.VK_RIGHT =>
+          ALGORITHM = (ALGORITHM + 1) % NUM_ALGORITHMS
+          println(s"algorithm = $ALGORITHM")
+        case KeyEvent.VK_LEFT  =>
+          ALGORITHM = (ALGORITHM - 1 + NUM_ALGORITHMS) % NUM_ALGORITHMS
+          println(s"algorithm = $ALGORITHM")
+        case KeyEvent.VK_UP    =>
+          NOISE = math.min(0.9f, NOISE + 0.1f)
+          println(s"noise = $NOISE")
+        case KeyEvent.VK_DOWN  =>
+          NOISE = math.max(0.0f, NOISE - 0.1f)
+          println(s"noise = $NOISE")
+        case _ =>
       }
     }
 
