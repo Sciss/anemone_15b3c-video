@@ -19,9 +19,11 @@ import javax.swing.WindowConstants
 
 import de.sciss.fscape.spect.Wavelet
 import de.sciss.numbers
-import processing.{event => pe}
 import processing.core.{PApplet, PConstants, PImage}
 import processing.video.Capture
+import processing.{event => pe}
+
+import scala.annotation.switch
 
 object Video {
   case class Config(device: String = "/dev/video0", listDevices: Boolean = false,
@@ -162,14 +164,19 @@ final class Video(config: Video.Config) extends PApplet {
     imgOut.loadPixels()
   }
 
+  private[this] var bufShift = 0
+
   private[this] def crop(x: Int, y: Int, w: Int, h: Int, buf: Array[Float]): Unit = {
     imgOut.copy(cam, x, y, w, h, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
     imgOut.loadPixels()
     val pixIn = imgOut.pixels
 
     // ---- copy gray-scale image to buffer ----
-    var j = 0
-    while (j < WINDOW_SIZE) {
+    var j   = 0
+    var k   = bufShift
+    val ws  = WINDOW_SIZE
+    val bs  = BUF_SIZE
+    while (j < ws) {
       val rgbIn = pixIn(j)
       // pix(i) = pix(i) ^ 0xFFFFFF
       val red   = (rgbIn & 0xFF0000) >> 16
@@ -178,42 +185,15 @@ final class Video(config: Video.Config) extends PApplet {
 
       val bright = (0.299f * red + 0.587f * green + 0.114f * blue) / 0xFF
       // val bright = if (bright0 > 1f) 1f else bright0
-      buf(j) = bright
+      buf(k) = bright
       j += 1
+      k = (k + 1) % bs
     }
-    while (j < BUF_SIZE) {
-      buf(j) = 0f
+    // println(s"aqui j = $j, k = $k")
+    while (j < bs) {
+      buf(k) = 0f
       j += 1
-    }
-  }
-
-  private[this] def cropOLD(xStart: Int, yStart: Int, buf: Array[Float]): Unit = {
-    val pixIn = cam.pixels
-
-    // ---- copy gray-scale image to buffer ----
-    var i       = yStart * VIDEO_WIDTH + xStart
-    var j       = 0
-    while (j < WINDOW_SIZE) {
-      val k = i + WINDOW_WIDTH
-      while (i < k) {
-        val rgbIn = pixIn(i)
-        // pix(i) = pix(i) ^ 0xFFFFFF
-        val red   = (rgbIn & 0xFF0000) >> 16
-        val green = (rgbIn & 0x00FF00) >>  8
-        val blue  =  rgbIn & 0x0000FF
-
-        val bright = (0.299f * red + 0.587f * green + 0.114f * blue) / 0xFF
-        // val bright = if (bright0 > 1f) 1f else bright0
-        buf(j) = bright
-
-        i += 1
-        j += 1
-      }
-      i += SCAN
-    }
-    while (j < BUF_SIZE) {
-      buf(j) = 0f
-      j += 1
+      k = (k + 1) % bs
     }
   }
 
@@ -236,7 +216,7 @@ final class Video(config: Video.Config) extends PApplet {
     Wavelet.fwdTransform(buf2, BUF_SIZE, WAVELET_8 /* WAVELET_4 */)
 
     var i = 0
-    ALGORITHM match {
+    (ALGORITHM: @switch) match {
       case 0 =>
         while (i < BUF_SIZE) {
           buf1(i) = math.max(buf1(i), buf2(i))
@@ -288,56 +268,63 @@ final class Video(config: Video.Config) extends PApplet {
 
     Wavelet.invTransform(buf1, BUF_SIZE, WAVELET_8 /* WAVELET_4 */)
 
-    //    Wavelet.fwdTransform(buf, BUF_SIZE, WAVELET_8)
-//    Wavelet.invTransform(buf, BUF_SIZE, WAVELET_4 )
-
-    // ---- normalize ----
-    if (NORMALIZE) {
-      i = 1
-      var MIN = buf1(0)
-      var MAX = buf1(0)
-      while (i < WINDOW_SIZE) {
-        val x = buf1(i)
-        if (x < MIN) MIN = x
-        if (x > MAX) MAX = x
-        i += 1
-      }
-      // println(s"MIN = $MIN, MAX = $MAX")
-      if (MIN < MAX) {
-        i = 0
-        val off   = -MIN
-        val scale = 1.0f / (MAX - MIN)
-        while (i < WINDOW_SIZE) {
-          buf1(i) = (buf1(i) + off) * scale
-          i += 1
-        }
-      }
-    }
+//    // ---- normalize ----
+//    if (NORMALIZE) {
+//      i = 1
+//      var MIN = buf1(0)
+//      var MAX = buf1(0)
+//      while (i < WINDOW_SIZE) {
+//        val x = buf1(i)
+//        if (x < MIN) MIN = x
+//        if (x > MAX) MAX = x
+//        i += 1
+//      }
+//      // println(s"MIN = $MIN, MAX = $MAX")
+//      if (MIN < MAX) {
+//        i = 0
+//        val off   = -MIN
+//        val scale = 1.0f / (MAX - MIN)
+//        while (i < WINDOW_SIZE) {
+//          buf1(i) = (buf1(i) + off) * scale
+//          i += 1
+//        }
+//      }
+//    }
 
     if (NOISE > 0f) {
-      i = 1
+      var i = 1
       var j = (java.lang.Math.random() * 0x20000).toInt
-      while (i < WINDOW_SIZE) {
+      var k = bufShift
+      val ws = WINDOW_SIZE
+      val bs = BUF_SIZE
+      while (i < ws) {
         j = (j + 1) % 0x20000
-        buf1(i) += noiseBuf(j)
+        buf1(k) += noiseBuf(j)
         i += 1
+        k = (k + 1) % bs
       }
     }
 
     // ---- copy buffer to p-image ----
     imgOut.loadPixels()
     val pixOut  = imgOut.pixels
-    var j = 0
-    while (j < WINDOW_SIZE) {
-      val b0      = buf1(j)
+    var j       = 0
+    var k       = bufShift
+    val ws      = WINDOW_SIZE
+    val bs      = BUF_SIZE
+    while (j < ws) {
+      val b0      = buf1(k)
       val b1      = if (b0 < 0f) 0f else b0
       val bright  = if (b1 > 1f) 1f else b1
       val bi      = (bright * 0xFF).toInt
       val rgbOut  = 0xFF000000 | (bi << 16) | (bi << 8) | bi
       pixOut(j)   = rgbOut
       j += 1
+      k = (k + 1) % bs
     }
     imgOut.updatePixels()
+
+    bufShift = (bufShift + 1) % bs
   }
 
   override def draw(): Unit = {
