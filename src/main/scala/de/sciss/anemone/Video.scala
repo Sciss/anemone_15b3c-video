@@ -130,8 +130,8 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] val noiseBuf = new Array[Float](0x20000)
 
   private[this] val FADE_DUR      = 60.0
-  // private[this] val FADE_FACTOR   = BUF_SIZE.pow(1.0 / (FADE_DUR * VIDEO_FPS))
-  private[this] val FADE_STEP     = BUF_SIZE / (FADE_DUR * VIDEO_FPS)
+  private[this] val FADE_FACTOR   = BUF_SIZE.pow(1.0 / (FADE_DUR * VIDEO_FPS))
+  // private[this] val FADE_STEP     = BUF_SIZE / (FADE_DUR * VIDEO_FPS)
 
   private def clipFrames(): Unit = {
     W1  = W1.clip(8, WINDOW_WIDTH )
@@ -282,12 +282,14 @@ final class Video(config: Video.Config) extends PApplet {
     val cr = currentRun.toInt - 1
     val prevRun = bs - cr
     if (prevRun > 0) {
-      runAlgorithm(id = previousAlgorithm, start = 0      , stop = prevRun)
-      runAlgorithm(id = ALGORITHM        , start = prevRun, stop = bs     )
+//      runAlgorithm(id = previousAlgorithm, start = 0      , stop = prevRun)
+//      runAlgorithm(id = ALGORITHM        , start = prevRun, stop = bs     )
+      runAlgorithm(id = previousAlgorithm, start = cr     , stop = bs)
+      runAlgorithm(id = ALGORITHM        , start = 0      , stop = cr)
       // currentRun += 512 // 256 // 128
-      // currentRun *= FADE_FACTOR
-      currentRun += FADE_STEP
-      println(f"run = ${currentRun * 100 / bs}%1.1f")
+      currentRun *= FADE_FACTOR
+      // currentRun += FADE_STEP
+      // println(f"run = ${currentRun * 100 / bs}%1.1f")
     } else {
       runAlgorithm(id = ALGORITHM        , start = 0      , stop = bs     )
     }
