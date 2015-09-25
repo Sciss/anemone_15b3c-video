@@ -123,8 +123,8 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] var adjustCorner = 0
 
   private[this] var NORMALIZE = false
-  private[this] var ALGORITHM = 0
   private[this] val NUM_ALGORITHMS = 5 // 6
+  private[this] var ALGORITHM = NUM_ALGORITHMS  // aka black
   private[this] var NOISE = 0.1f
 
   private[this] val noiseBuf = new Array[Float](0x20000)
@@ -149,7 +149,13 @@ final class Video(config: Video.Config) extends PApplet {
     super.init()
     updateNoise()
     setPreferredSize(new Dimension(WINDOW_WIDTH, WINDOW_HEIGHT))
+    setRenderMode(true)
     clipFrames()
+  }
+
+  private def setRenderMode(b: Boolean): Unit = {
+    renderMode = b
+    if (renderMode) noCursor() else cursor()
   }
 
   private def updateNoise(): Unit = {
@@ -266,6 +272,10 @@ final class Video(config: Video.Config) extends PApplet {
           }
         }
       case _ =>
+        while (i < stop) {
+          buf1(i) = 0f
+          i += 1
+        }
     }
   }
 
@@ -416,7 +426,7 @@ final class Video(config: Video.Config) extends PApplet {
     e.getKeyCode match {
       case KeyEvent.VK_A => // exit adjustment mode
         println(s"--x1 $X1 --y1 $Y1 --w1 $W1 --h1 $H1 --x2 $X2 --y2 $Y2 --w2 $W2 --h2 $H2")
-        renderMode = true
+        setRenderMode(true)
 
       case KeyEvent.VK_SPACE => adjustCorner = (adjustCorner + 1) % 4
       case KeyEvent.VK_LEFT  =>
@@ -469,16 +479,21 @@ final class Video(config: Video.Config) extends PApplet {
       }
     } else {
       e.getKeyCode match {
-        case KeyEvent.VK_A     => renderMode = false  // enter adjustment mode
-        case KeyEvent.VK_N     =>
-          NORMALIZE = !NORMALIZE
-          println(s"normalize = ${if (NORMALIZE) "on" else "off"}")
+        case KeyEvent.VK_A     => setRenderMode(false)  // enter adjustment mode
+//        case KeyEvent.VK_N     =>
+//          NORMALIZE = !NORMALIZE
+//          println(s"normalize = ${if (NORMALIZE) "on" else "off"}")
+        case KeyEvent.VK_ESCAPE =>
+          setAlgorithm(NUM_ALGORITHMS)
+          currentRun = BUF_SIZE
+        case KeyEvent.VK_ENTER =>
+          // XXX TODO: run show
+
         case KeyEvent.VK_RIGHT =>
           setAlgorithm((ALGORITHM + 1) % NUM_ALGORITHMS)
           println(s"algorithm = $ALGORITHM")
         case KeyEvent.VK_LEFT  =>
           setAlgorithm((ALGORITHM - 1 + NUM_ALGORITHMS) % NUM_ALGORITHMS)
-          currentRun = 0
           println(s"algorithm = $ALGORITHM")
         case KeyEvent.VK_UP    =>
           NOISE = math.min(0.9f, NOISE + 0.1f)
@@ -487,6 +502,16 @@ final class Video(config: Video.Config) extends PApplet {
         case KeyEvent.VK_DOWN  =>
           NOISE = math.max(0.0f, NOISE - 0.1f)
           println(s"noise = $NOISE")
+        case KeyEvent.VK_1 if NUM_ALGORITHMS >= 1 => setAlgorithm(1 - 1)
+        case KeyEvent.VK_2 if NUM_ALGORITHMS >= 2 => setAlgorithm(2 - 1)
+        case KeyEvent.VK_3 if NUM_ALGORITHMS >= 3 => setAlgorithm(3 - 1)
+        case KeyEvent.VK_4 if NUM_ALGORITHMS >= 4 => setAlgorithm(4 - 1)
+        case KeyEvent.VK_5 if NUM_ALGORITHMS >= 5 => setAlgorithm(5 - 1)
+        case KeyEvent.VK_6 if NUM_ALGORITHMS >= 6 => setAlgorithm(6 - 1)
+        case KeyEvent.VK_7 if NUM_ALGORITHMS >= 7 => setAlgorithm(7 - 1)
+        case KeyEvent.VK_8 if NUM_ALGORITHMS >= 8 => setAlgorithm(8 - 1)
+        case KeyEvent.VK_9 if NUM_ALGORITHMS >= 9 => setAlgorithm(9 - 1)
+        case KeyEvent.VK_0                        => setAlgorithm(NUM_ALGORITHMS) // black
         case _ =>
       }
     }
