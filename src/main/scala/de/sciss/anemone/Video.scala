@@ -129,6 +129,10 @@ final class Video(config: Video.Config) extends PApplet {
 
   private[this] val noiseBuf = new Array[Float](0x20000)
 
+  private[this] val FADE_DUR      = 60.0
+  // private[this] val FADE_FACTOR   = BUF_SIZE.pow(1.0 / (FADE_DUR * VIDEO_FPS))
+  private[this] val FADE_STEP     = BUF_SIZE / (FADE_DUR * VIDEO_FPS)
+
   private def clipFrames(): Unit = {
     W1  = W1.clip(8, WINDOW_WIDTH )
     H1  = H1.clip(8, WINDOW_HEIGHT)
@@ -208,50 +212,52 @@ final class Video(config: Video.Config) extends PApplet {
 //    imgOut.copy(cam, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
 //  }
 
-  private def renderFrame(): Unit = {
-    crop(x = X1, y = Y1, w = W1, h = H1, buf = buf1)
-    crop(x = X2, y = Y2, w = W2, h = H2, buf = buf2)
+  private[this] var previousAlgorithm = ALGORITHM
 
-    Wavelet.fwdTransform(buf1, BUF_SIZE, WAVELET_8 /* WAVELET_4 */)
-    Wavelet.fwdTransform(buf2, BUF_SIZE, WAVELET_8 /* WAVELET_4 */)
+  private def setAlgorithm(id: Int): Unit = {
+    previousAlgorithm = ALGORITHM
+    ALGORITHM         = id
+    currentRun        = 1.0
+  }
 
-    var i = 0
-    (ALGORITHM: @switch) match {
+  private def runAlgorithm(id: Int, start: Int, stop: Int): Unit = {
+    var i = start
+    (id: @switch) match {
       case 0 =>
-        while (i < BUF_SIZE) {
+        while (i < stop) {
           buf1(i) = math.max(buf1(i), buf2(i))
           // buf1(i) = math.max(buf1(i), buf2(i)) - math.min(buf1(i), buf2(i))
           i += 1
         }
       case 1 =>
-        while (i < BUF_SIZE) {
+        while (i < stop) {
           buf1(i) = buf1(i).toInt ^ buf2(i).toInt
           i += 1
         }
-//      case 2 =>
-//        while (i < BUF_SIZE) {
-//          buf1(i) = (buf1(i) atan2 buf2(i)) * 0.25f
-//          i += 1
-//        }
-//      case 3 =>
-//        while (i < BUF_SIZE) {
-//          buf1(i) = buf1(i) hypotx buf2(i)  // !
-//          i += 1
-//        }
+      //      case 2 =>
+      //        while (i < BUF_SIZE) {
+      //          buf1(i) = (buf1(i) atan2 buf2(i)) * 0.25f
+      //          i += 1
+      //        }
+      //      case 3 =>
+      //        while (i < BUF_SIZE) {
+      //          buf1(i) = buf1(i) hypotx buf2(i)  // !
+      //          i += 1
+      //        }
       case 2 =>
-        while (i < BUF_SIZE) {
+        while (i < stop) {
           if (i % 2 == 0) buf1(i) = buf2(i)
           i += 1
         }
       case 3 =>
-        while (i < BUF_SIZE) {
+        while (i < stop) {
           buf1(i) = math.max(buf1(i), buf2(i)) - math.min(buf1(i), buf2(i))
           i += 1
         }
       case 4 =>
         var even = true
-        var k = 2
-        while (i < BUF_SIZE) {
+        var k = (i + 1).nextPowerOfTwo
+        while (i < stop) {
           if (even) buf1(i) = buf2(i)
           i += 1
           if (i == k) {
@@ -261,12 +267,37 @@ final class Video(config: Video.Config) extends PApplet {
         }
       case _ =>
     }
+  }
+
+  private[this] var currentRun = 1.0
+
+  private def renderFrame(): Unit = {
+    crop(x = X1, y = Y1, w = W1, h = H1, buf = buf1)
+    crop(x = X2, y = Y2, w = W2, h = H2, buf = buf2)
+
+    val bs = BUF_SIZE
+    Wavelet.fwdTransform(buf1, bs, WAVELET_8 /* WAVELET_4 */)
+    Wavelet.fwdTransform(buf2, bs, WAVELET_8 /* WAVELET_4 */)
+
+    val cr = currentRun.toInt - 1
+    val prevRun = bs - cr
+    if (prevRun > 0) {
+      runAlgorithm(id = previousAlgorithm, start = 0      , stop = prevRun)
+      runAlgorithm(id = ALGORITHM        , start = prevRun, stop = bs     )
+      // currentRun += 512 // 256 // 128
+      // currentRun *= FADE_FACTOR
+      currentRun += FADE_STEP
+      println(f"run = ${currentRun * 100 / bs}%1.1f")
+    } else {
+      runAlgorithm(id = ALGORITHM        , start = 0      , stop = bs     )
+    }
+
     // var MIN = Float.PositiveInfinity
     // var MAX = Float.NegativeInfinity
     // val gain = (1.0f / BUF_SIZE).sqrt
     // println(s"MIN = $MIN, MAX = $MAX")
 
-    Wavelet.invTransform(buf1, BUF_SIZE, WAVELET_8 /* WAVELET_4 */)
+    Wavelet.invTransform(buf1, bs, WAVELET_8 /* WAVELET_4 */)
 
 //    // ---- normalize ----
 //    if (NORMALIZE) {
@@ -311,7 +342,6 @@ final class Video(config: Video.Config) extends PApplet {
     var j       = 0
     var k       = bufShift
     val ws      = WINDOW_SIZE
-    val bs      = BUF_SIZE
     while (j < ws) {
       val b0      = buf1(k)
       val b1      = if (b0 < 0f) 0f else b0
@@ -442,10 +472,11 @@ final class Video(config: Video.Config) extends PApplet {
           NORMALIZE = !NORMALIZE
           println(s"normalize = ${if (NORMALIZE) "on" else "off"}")
         case KeyEvent.VK_RIGHT =>
-          ALGORITHM = (ALGORITHM + 1) % NUM_ALGORITHMS
+          setAlgorithm((ALGORITHM + 1) % NUM_ALGORITHMS)
           println(s"algorithm = $ALGORITHM")
         case KeyEvent.VK_LEFT  =>
-          ALGORITHM = (ALGORITHM - 1 + NUM_ALGORITHMS) % NUM_ALGORITHMS
+          setAlgorithm((ALGORITHM - 1 + NUM_ALGORITHMS) % NUM_ALGORITHMS)
+          currentRun = 0
           println(s"algorithm = $ALGORITHM")
         case KeyEvent.VK_UP    =>
           NOISE = math.min(0.9f, NOISE + 0.1f)
