@@ -113,6 +113,7 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] var H2 = if (config.h2 < 0) WINDOW_HEIGHT else config.h2
 
   private[this] val WAVELET_4  = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB4 )
+  private[this] val WAVELET_8  = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB8 )
   private[this] val WAVELET_16 = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB16)
 
   private[this] var renderMode = true
@@ -121,8 +122,10 @@ final class Video(config: Video.Config) extends PApplet {
 
   private[this] var NORMALIZE = false
   private[this] var ALGORITHM = 0
-  private[this] val NUM_ALGORITHMS = 6
+  private[this] val NUM_ALGORITHMS = 5 // 6
   private[this] var NOISE = 0.1f
+
+  private[this] val noiseBuf = new Array[Float](0x20000)
 
   private def clipFrames(): Unit = {
     W1  = W1.clip(8, WINDOW_WIDTH )
@@ -138,8 +141,17 @@ final class Video(config: Video.Config) extends PApplet {
 
   override def init(): Unit = {
     super.init()
+    updateNoise()
     setPreferredSize(new Dimension(WINDOW_WIDTH, WINDOW_HEIGHT))
     clipFrames()
+  }
+
+  private def updateNoise(): Unit = {
+    var i = 0
+    while (i < noiseBuf.length) {
+      noiseBuf(i) = (java.lang.Math.random().toFloat - 0.5f) * NOISE
+      i += 1
+    }
   }
 
   override def setup(): Unit = {
@@ -220,8 +232,8 @@ final class Video(config: Video.Config) extends PApplet {
     crop(x = X1, y = Y1, w = W1, h = H1, buf = buf1)
     crop(x = X2, y = Y2, w = W2, h = H2, buf = buf2)
 
-    Wavelet.fwdTransform(buf1, BUF_SIZE, WAVELET_4)
-    Wavelet.fwdTransform(buf2, BUF_SIZE, WAVELET_4)
+    Wavelet.fwdTransform(buf1, BUF_SIZE, WAVELET_8 /* WAVELET_4 */)
+    Wavelet.fwdTransform(buf2, BUF_SIZE, WAVELET_8 /* WAVELET_4 */)
 
     var i = 0
     ALGORITHM match {
@@ -236,25 +248,36 @@ final class Video(config: Video.Config) extends PApplet {
           buf1(i) = buf1(i).toInt ^ buf2(i).toInt
           i += 1
         }
+//      case 2 =>
+//        while (i < BUF_SIZE) {
+//          buf1(i) = (buf1(i) atan2 buf2(i)) * 0.25f
+//          i += 1
+//        }
+//      case 3 =>
+//        while (i < BUF_SIZE) {
+//          buf1(i) = buf1(i) hypotx buf2(i)  // !
+//          i += 1
+//        }
       case 2 =>
-        while (i < BUF_SIZE) {
-          buf1(i) = (buf1(i) atan2 buf2(i)) * 0.25f
-          i += 1
-        }
-      case 3 =>
-        while (i < BUF_SIZE) {
-          buf1(i) = buf1(i) hypotx buf2(i)  // !
-          i += 1
-        }
-      case 4 =>
         while (i < BUF_SIZE) {
           if (i % 2 == 0) buf1(i) = buf2(i)
           i += 1
         }
-      case 5 =>
+      case 3 =>
         while (i < BUF_SIZE) {
           buf1(i) = math.max(buf1(i), buf2(i)) - math.min(buf1(i), buf2(i))
           i += 1
+        }
+      case 4 =>
+        var even = true
+        var k = 2
+        while (i < BUF_SIZE) {
+          if (even) buf1(i) = buf2(i)
+          i += 1
+          if (i == k) {
+            k <<= 1
+            even = !even
+          }
         }
       case _ =>
     }
@@ -263,9 +286,9 @@ final class Video(config: Video.Config) extends PApplet {
     // val gain = (1.0f / BUF_SIZE).sqrt
     // println(s"MIN = $MIN, MAX = $MAX")
 
-    Wavelet.invTransform(buf1, BUF_SIZE, WAVELET_4)
+    Wavelet.invTransform(buf1, BUF_SIZE, WAVELET_8 /* WAVELET_4 */)
 
-    //    Wavelet.fwdTransform(buf, BUF_SIZE, WAVELET_16)
+    //    Wavelet.fwdTransform(buf, BUF_SIZE, WAVELET_8)
 //    Wavelet.invTransform(buf, BUF_SIZE, WAVELET_4 )
 
     // ---- normalize ----
@@ -293,8 +316,10 @@ final class Video(config: Video.Config) extends PApplet {
 
     if (NOISE > 0f) {
       i = 1
+      var j = (java.lang.Math.random() * 0x20000).toInt
       while (i < WINDOW_SIZE) {
-        buf1(i) += (java.lang.Math.random().toFloat - 0.5f) * NOISE
+        j = (j + 1) % 0x20000
+        buf1(i) += noiseBuf(j)
         i += 1
       }
     }
@@ -438,6 +463,7 @@ final class Video(config: Video.Config) extends PApplet {
         case KeyEvent.VK_UP    =>
           NOISE = math.min(0.9f, NOISE + 0.1f)
           println(s"noise = $NOISE")
+          updateNoise()
         case KeyEvent.VK_DOWN  =>
           NOISE = math.max(0.0f, NOISE - 0.1f)
           println(s"noise = $NOISE")
