@@ -18,13 +18,15 @@ lazy val jnaVersion         = "3.4.0"
 lazy val scissDSPVersion    = "1.2.2"
 lazy val numbersVersion     = "0.1.1"
 lazy val scoptVersion       = "3.3.0"
+lazy val kollFlitzVersion   = "0.2.0"
 
 libraryDependencies ++= Seq(
   "org.processing"                %  "video"          % processingVersion,   // exclude("net.java.dev.jna", "jna") - doesn't work
   "com.googlecode.gstreamer-java" %  "gstreamer-java" % gstreamerVersion,
   "de.sciss"                      %% "scissdsp"       % scissDSPVersion,
   "de.sciss"                      %% "numbers"        % numbersVersion,
-  "com.github.scopt"              %% "scopt"          % scoptVersion
+  "com.github.scopt"              %% "scopt"          % scoptVersion,
+  "de.sciss"                      %% "kollflitz"      % kollFlitzVersion
 )
 
 dependencyOverrides += "net.java.dev.jna" % "jna" % jnaVersion

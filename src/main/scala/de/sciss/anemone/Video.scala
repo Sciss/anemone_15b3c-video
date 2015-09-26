@@ -15,9 +15,11 @@ package de.sciss.anemone
 
 import java.awt.event.KeyEvent
 import java.awt.{Dimension, EventQueue}
+import java.text.SimpleDateFormat
 import javax.swing.WindowConstants
 
 import de.sciss.fscape.spect.Wavelet
+import de.sciss.kollflitz.impl.Urn
 import de.sciss.numbers
 import processing.core.{PApplet, PConstants, PImage}
 import processing.video.Capture
@@ -30,7 +32,10 @@ object Video {
                     deviceWidth: Int = 1920, deviceHeight: Int = 1080, fps: Int = 24,
                     screenWidth: Int = 1024, screenHeight: Int = 768,
                     x1: Int = -1, y1: Int = -1, w1: Int = -1, h1: Int = -1,
-                    x2: Int = -1, y2: Int = -1, w2: Int = -1, h2: Int = -1)
+                    x2: Int = -1, y2: Int = -1, w2: Int = -1, h2: Int = -1,
+                    fadeDur: Double = 60, noise: Double = 0.1, wavelet: Int = 8,
+                    intervalDur: Double = 3 * 60 + 10, totalDur: Double = 15 * 60 + 10,
+                    seed: Long = 0L /* -1L */, logging: Boolean = false)
 
   def main(args: Array[String]) = {
     val parser = new scopt.OptionParser[Config]("anemone_15b3c-video") {
@@ -49,6 +54,17 @@ object Video {
       opt[Int   ]("y2") text "second frame top    (-1 = auto)" action { case (v, c) => c.copy(y2 = v) }
       opt[Int   ]("w2") text "second frame width  (-1 = auto)" action { case (v, c) => c.copy(w2 = v) }
       opt[Int   ]("h2") text "second frame height (-1 = auto)" action { case (v, c) => c.copy(h2 = v) }
+      opt[Double]("fade"   ) text "fade duration in seconds"   action { case (v, c) => c.copy(fadeDur = v) }
+      opt[Double]("noise"  ) text "amount of noise (0 to 1)"   action { case (v, c) => c.copy(noise   = v) }
+      opt[Int   ]("wavelet") text "wavelet coefficient set (4, 8, or 16)" validate { i =>
+        if (i == 4 || i == 8 || i == 16) Right(()) else Left(s"Value $i is not one of 4, 8, 16")
+      } action { case (v, c) => c.copy(h2 = v) }
+      opt[Double]('i', "interval") text "interval between algorithms in seconds" action {
+        case (v, c) => c.copy(intervalDur = v) }
+      opt[Double]('t', "total") text "total duration for algorithm iteration in seconds" action {
+        case (v, c) => c.copy(totalDur = v) }
+      opt[Long  ]("seed") text "RNG seed for algorithm selection (-1 = auto)" action { case (v, c) => c.copy(seed = v) }
+      opt[Unit  ]('v', "log"  ) text "enable debug logging" action { case (_, c) => c.copy(logging = true) }
     }
     parser.parse(args, Config()).fold(sys.exit(1)) { config =>
       if (config.listDevices) {
@@ -98,11 +114,12 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] val VIDEO_FIT_W = VIDEO_WIDTH  * VIDEO_FIT_SCALE
   private[this] val VIDEO_FIT_H = VIDEO_HEIGHT * VIDEO_FIT_SCALE
 
-  private[this] val SCAN  = VIDEO_WIDTH - WINDOW_WIDTH
+  // private[this] val SCAN  = VIDEO_WIDTH - WINDOW_WIDTH
 
   private[this] var cam: Capture = _
   private[this] val buf1    = new Array[Float](BUF_SIZE)
   private[this] val buf2    = new Array[Float](BUF_SIZE)
+  // private[this] val imgTmp  = new PImage(WINDOW_WIDTH, WINDOW_HEIGHT, PConstants.RGB /* ARGB */)
   private[this] val imgOut  = new PImage(WINDOW_WIDTH, WINDOW_HEIGHT, PConstants.RGB /* ARGB */)
 
   private[this] var X1 = if (config.x1 < 0) 0 else config.x1
@@ -114,24 +131,30 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] var W2 = if (config.w2 < 0) WINDOW_WIDTH  else config.w2
   private[this] var H2 = if (config.h2 < 0) WINDOW_HEIGHT else config.h2
 
-  private[this] val WAVELET_4  = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB4 )
-  private[this] val WAVELET_8  = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB8 )
-  private[this] val WAVELET_16 = Wavelet.getCoeffs(Wavelet.COEFFS_DAUB16)
+  private[this] val WAVELET         = Wavelet.getCoeffs(config.wavelet match {
+    case  4 => Wavelet.COEFFS_DAUB4
+    case  8 => Wavelet.COEFFS_DAUB8
+    case 16 => Wavelet.COEFFS_DAUB16
+  })
 
-  private[this] var renderMode = true
+  private[this] var renderMode      = true
 
-  private[this] var adjustCorner = 0
+  private[this] var adjustCorner    = 0
 
-  private[this] var NORMALIZE = false
-  private[this] val NUM_ALGORITHMS = 5 // 6
-  private[this] var ALGORITHM = NUM_ALGORITHMS  // aka black
-  private[this] var NOISE = 0.1f
+  // private[this] var NORMALIZE = false
+  private[this] val NUM_ALGORITHMS  = 5 // 6
+  private[this] var ALGORITHM       = NUM_ALGORITHMS  // aka black
 
-  private[this] val noiseBuf = new Array[Float](0x20000)
+  private[this] var NOISE           = config.noise.toFloat // 0.1f
 
-  private[this] val FADE_DUR      = 60.0
-  private[this] val FADE_FACTOR   = BUF_SIZE.pow(1.0 / (FADE_DUR * VIDEO_FPS))
+  private[this] val noiseBuf        = new Array[Float](0x20000)
+
+  private[this] val FADE_DUR        = config.fadeDur // 60.0
+  private[this] val FADE_FACTOR     = BUF_SIZE.pow(1.0 / (FADE_DUR * VIDEO_FPS))
   // private[this] val FADE_STEP     = BUF_SIZE / (FADE_DUR * VIDEO_FPS)
+
+  private[this] var stopTime        = 0L
+  private[this] var nextEvent       = Long.MaxValue
 
   private def clipFrames(): Unit = {
     W1  = W1.clip(8, WINDOW_WIDTH )
@@ -207,10 +230,9 @@ final class Video(config: Video.Config) extends PApplet {
     }
   }
 
+  // N.B.: This seems to happen _outside_ of AWT event loop
   def captureEvent(c: Capture): Unit = {
     c.read()
-
-    if (renderMode) renderFrame() // else renderAdjustment()
     redraw()
   }
 
@@ -219,11 +241,26 @@ final class Video(config: Video.Config) extends PApplet {
 //  }
 
   private[this] var previousAlgorithm = ALGORITHM
+  private[this] var fadingAlgorithm   = ALGORITHM
+
+  private[this] val algorithmUrn =
+    new Urn[Int](0 until NUM_ALGORITHMS, infinite = true)(
+      new util.Random(if (config.seed == -1L) System.currentTimeMillis() else config.seed))
+
+  private def log(what: => String): Unit = if (config.logging) println(what)
+
+  private def checkNextEvent(): Unit =
+    if (!isFading && ALGORITHM != fadingAlgorithm) {
+      previousAlgorithm = fadingAlgorithm
+      fadingAlgorithm   = ALGORITHM
+      currentRun        = 1.0
+      log(s"Next fade from $previousAlgorithm to $fadingAlgorithm")
+    }
 
   private def setAlgorithm(id: Int): Unit = {
-    previousAlgorithm = ALGORITHM
-    ALGORITHM         = id
-    currentRun        = 1.0
+    ALGORITHM = id
+    log(s"setAlgorithm($id)")
+    checkNextEvent()
   }
 
   private def runAlgorithm(id: Int, start: Int, stop: Int): Unit = {
@@ -279,29 +316,51 @@ final class Video(config: Video.Config) extends PApplet {
     }
   }
 
-  private[this] var currentRun = 1.0
+  private def startEvent(): Unit = {
+    val now   = System.currentTimeMillis()
+    stopTime  = now + (config.totalDur * 1000).toLong
+    nextEvent = now
+    log(s"startEvent - now = ${formatTime(now)}, stopTime = ${formatTime(stopTime)}")
+    mkNextEvent()
+  }
+
+  private[this] val timeFormat = new SimpleDateFormat("hh:mm:ss.SSS")
+
+  private def formatTime(n: Long): String = timeFormat.format(new java.util.Date(n))
+
+  private def mkNextEvent(): Unit = {
+    val now   = System.currentTimeMillis()
+    nextEvent = nextEvent + (config.intervalDur * 1000).toLong
+    log(s"mkNextEvent - ${formatTime(nextEvent)}")
+    if (nextEvent >= stopTime) stopEvent()
+    setAlgorithm(algorithmUrn.next())
+  }
+
+  private def stopEvent(): Unit = {
+    log("stopEvent")
+    nextEvent = Long.MaxValue
+  }
+
+  private[this] var currentRun: Double = BUF_SIZE // 1.0
+
+  private def isFading: Boolean = currentRun < BUF_SIZE
 
   private def renderFrame(): Unit = {
     crop(x = X1, y = Y1, w = W1, h = H1, buf = buf1)
     crop(x = X2, y = Y2, w = W2, h = H2, buf = buf2)
 
     val bs = BUF_SIZE
-    Wavelet.fwdTransform(buf1, bs, WAVELET_8 /* WAVELET_4 */)
-    Wavelet.fwdTransform(buf2, bs, WAVELET_8 /* WAVELET_4 */)
+    Wavelet.fwdTransform(buf1, bs, WAVELET)
+    Wavelet.fwdTransform(buf2, bs, WAVELET)
 
-    val cr = currentRun.toInt - 1
-    val prevRun = bs - cr
-    if (prevRun > 0) {
-//      runAlgorithm(id = previousAlgorithm, start = 0      , stop = prevRun)
-//      runAlgorithm(id = ALGORITHM        , start = prevRun, stop = bs     )
-      runAlgorithm(id = previousAlgorithm, start = cr     , stop = bs)
-      runAlgorithm(id = ALGORITHM        , start = 0      , stop = cr)
-      // currentRun += 512 // 256 // 128
+    if (isFading) {
+      val cr = currentRun.toInt - 1
+      runAlgorithm(id = previousAlgorithm, start = cr, stop = bs)
+      runAlgorithm(id = fadingAlgorithm  , start = 0 , stop = cr)
       currentRun *= FADE_FACTOR
-      // currentRun += FADE_STEP
-      // println(f"run = ${currentRun * 100 / bs}%1.1f")
+      checkNextEvent()
     } else {
-      runAlgorithm(id = ALGORITHM        , start = 0      , stop = bs     )
+      runAlgorithm(id = fadingAlgorithm, start = 0, stop = bs)
     }
 
     // var MIN = Float.PositiveInfinity
@@ -309,7 +368,7 @@ final class Video(config: Video.Config) extends PApplet {
     // val gain = (1.0f / BUF_SIZE).sqrt
     // println(s"MIN = $MIN, MAX = $MAX")
 
-    Wavelet.invTransform(buf1, bs, WAVELET_8 /* WAVELET_4 */)
+    Wavelet.invTransform(buf1, bs, WAVELET)
 
 //    // ---- normalize ----
 //    if (NORMALIZE) {
@@ -367,6 +426,9 @@ final class Video(config: Video.Config) extends PApplet {
     imgOut.updatePixels()
 
     bufShift = (bufShift + 1) % bs
+
+    val now = System.currentTimeMillis()
+    if (now >= nextEvent) mkNextEvent()
   }
 
   override def draw(): Unit = {
@@ -377,7 +439,10 @@ final class Video(config: Video.Config) extends PApplet {
     noStroke()
     rect(0, 0, w, h)
 
-    if (renderMode) drawRender() else drawAdjustment()
+    if (renderMode) {
+      renderFrame()
+      drawRender()
+    } else drawAdjustment()
   }
 
   private def red  (): Unit = stroke(0xFF, 0x00, 0x00)
@@ -484,16 +549,20 @@ final class Video(config: Video.Config) extends PApplet {
 //          NORMALIZE = !NORMALIZE
 //          println(s"normalize = ${if (NORMALIZE) "on" else "off"}")
         case KeyEvent.VK_ESCAPE =>
-          setAlgorithm(NUM_ALGORITHMS)
-          currentRun = BUF_SIZE
-        case KeyEvent.VK_ENTER =>
-          // XXX TODO: run show
+          previousAlgorithm = NUM_ALGORITHMS
+          fadingAlgorithm   = NUM_ALGORITHMS
+          ALGORITHM         = NUM_ALGORITHMS
+          currentRun        = BUF_SIZE
+          nextEvent         = Long.MaxValue
 
+        case KeyEvent.VK_ENTER => startEvent()
         case KeyEvent.VK_RIGHT =>
           setAlgorithm((ALGORITHM + 1) % NUM_ALGORITHMS)
+          stopEvent()
           println(s"algorithm = $ALGORITHM")
         case KeyEvent.VK_LEFT  =>
           setAlgorithm((ALGORITHM - 1 + NUM_ALGORITHMS) % NUM_ALGORITHMS)
+          stopEvent()
           println(s"algorithm = $ALGORITHM")
         case KeyEvent.VK_UP    =>
           NOISE = math.min(0.9f, NOISE + 0.1f)
@@ -502,16 +571,16 @@ final class Video(config: Video.Config) extends PApplet {
         case KeyEvent.VK_DOWN  =>
           NOISE = math.max(0.0f, NOISE - 0.1f)
           println(s"noise = $NOISE")
-        case KeyEvent.VK_1 if NUM_ALGORITHMS >= 1 => setAlgorithm(1 - 1)
-        case KeyEvent.VK_2 if NUM_ALGORITHMS >= 2 => setAlgorithm(2 - 1)
-        case KeyEvent.VK_3 if NUM_ALGORITHMS >= 3 => setAlgorithm(3 - 1)
-        case KeyEvent.VK_4 if NUM_ALGORITHMS >= 4 => setAlgorithm(4 - 1)
-        case KeyEvent.VK_5 if NUM_ALGORITHMS >= 5 => setAlgorithm(5 - 1)
-        case KeyEvent.VK_6 if NUM_ALGORITHMS >= 6 => setAlgorithm(6 - 1)
-        case KeyEvent.VK_7 if NUM_ALGORITHMS >= 7 => setAlgorithm(7 - 1)
-        case KeyEvent.VK_8 if NUM_ALGORITHMS >= 8 => setAlgorithm(8 - 1)
-        case KeyEvent.VK_9 if NUM_ALGORITHMS >= 9 => setAlgorithm(9 - 1)
-        case KeyEvent.VK_0                        => setAlgorithm(NUM_ALGORITHMS) // black
+        case KeyEvent.VK_1 if NUM_ALGORITHMS >= 1 => setAlgorithm(1 - 1); stopEvent()
+        case KeyEvent.VK_2 if NUM_ALGORITHMS >= 2 => setAlgorithm(2 - 1); stopEvent()
+        case KeyEvent.VK_3 if NUM_ALGORITHMS >= 3 => setAlgorithm(3 - 1); stopEvent()
+        case KeyEvent.VK_4 if NUM_ALGORITHMS >= 4 => setAlgorithm(4 - 1); stopEvent()
+        case KeyEvent.VK_5 if NUM_ALGORITHMS >= 5 => setAlgorithm(5 - 1); stopEvent()
+        case KeyEvent.VK_6 if NUM_ALGORITHMS >= 6 => setAlgorithm(6 - 1); stopEvent()
+        case KeyEvent.VK_7 if NUM_ALGORITHMS >= 7 => setAlgorithm(7 - 1); stopEvent()
+        case KeyEvent.VK_8 if NUM_ALGORITHMS >= 8 => setAlgorithm(8 - 1); stopEvent()
+        case KeyEvent.VK_9 if NUM_ALGORITHMS >= 9 => setAlgorithm(9 - 1); stopEvent()
+        case KeyEvent.VK_0                        => setAlgorithm(NUM_ALGORITHMS); stopEvent() // black
         case _ =>
       }
     }
