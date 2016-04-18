@@ -21,6 +21,7 @@ import javax.swing.WindowConstants
 import de.sciss.fscape.spect.Wavelet
 import de.sciss.kollflitz.impl.Urn
 import de.sciss.numbers
+import processing.awt.PSurfaceAWT
 import processing.core.{PApplet, PConstants, PImage}
 import processing.video.Capture
 import processing.{event => pe}
@@ -79,16 +80,23 @@ object Video {
   }
 
   private def run(config: Config): Unit = {
-    val sketch = new Video(config)
-    val frame = new javax.swing.JFrame("Anemone")
-    frame.getContentPane.add(sketch)
-    frame.setUndecorated(true)
-    frame.setResizable(false)
-    frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE)
-    sketch.frame = frame
+    val sketch  = new Video(config)
+    // val frame   = new javax.swing.JFrame("Anemone")
+    // https://stackoverflow.com/questions/33101812/embed-processing-3-into-swing#33105886
+    val surface = sketch.surface.asInstanceOf[PSurfaceAWT]
+    // sketch.setSize(new Dimension(WINDOW_WIDTH, WINDOW_HEIGHT))
     sketch.init()
-    frame.pack()
-    frame.setVisible(true)
+    surface.initFrame(sketch)
+    surface.setVisible(true)
+
+//    frame.getContentPane.add(sketch)
+//    frame.setUndecorated(true)
+//    frame.setResizable(false)
+//    frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE)
+//    sketch.frame = frame
+    sketch.init()
+//    frame.pack()
+//    frame.setVisible(true)
   }
 }
 final class Video(config: Video.Config) extends PApplet {
@@ -169,9 +177,9 @@ final class Video(config: Video.Config) extends PApplet {
   }
 
   override def init(): Unit = {
-    super.init()
+    // super.init()
     updateNoise()
-    setPreferredSize(new Dimension(WINDOW_WIDTH, WINDOW_HEIGHT))
+    // setPreferredSize(new Dimension(WINDOW_WIDTH, WINDOW_HEIGHT))
     setRenderMode(true)
     clipFrames()
   }
@@ -200,7 +208,8 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] var bufShift = 0
 
   private[this] def crop(x: Int, y: Int, w: Int, h: Int, buf: Array[Float]): Unit = {
-    imgOut.copy(cam, x, y, w, h, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+
+    imgOut.copy(cam: PImage, x, y, w, h, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
     imgOut.loadPixels()
     val pixIn = imgOut.pixels
 
@@ -433,8 +442,8 @@ final class Video(config: Video.Config) extends PApplet {
 
   override def draw(): Unit = {
     // if (cam.available()) cam.read()
-    val w = getWidth
-    val h = getHeight
+    val w = width // getWidth
+    val h = height // getHeight
     fill(0f)
     noStroke()
     rect(0, 0, w, h)
@@ -449,16 +458,16 @@ final class Video(config: Video.Config) extends PApplet {
   private def green(): Unit = stroke(0x00, 0xC0, 0x00)
 
   private def drawRender(): Unit = {
-    val w = getWidth
-    val h = getHeight
+    val w = width // getWidth
+    val h = height // getHeight
     val x = (w - WINDOW_WIDTH ) >> 1
     val y = (h - WINDOW_HEIGHT) >> 1
     image(imgOut, x, y)
   }
 
   private def drawAdjustment(): Unit = {
-    val w = getWidth
-    val h = getHeight
+    val w = width //  getWidth
+    val h = height // getHeight
     val x = (w - VIDEO_FIT_W) / 2
     val y = (h - VIDEO_FIT_H) / 2
     image(cam, x, y, VIDEO_FIT_W, VIDEO_FIT_H)
