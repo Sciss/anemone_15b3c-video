@@ -3,7 +3,7 @@
 (C)opyright 2015&ndash2016 Hanns Holger Rutz. All rights reserved. Published under
 the GNU General Public License v2+.
 
-(todo)
+<img src="screenshot.jpg" alt="screenshot" width="512" height="384"/>
 
 ## sbt problem
 

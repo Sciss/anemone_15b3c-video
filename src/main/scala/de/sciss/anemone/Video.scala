@@ -2,7 +2,7 @@
  *  Video.scala
  *  (anemone_15b3c-video)
  *
- *  Copyright (c) 2015 Hanns Holger Rutz. All rights reserved.
+ *  Copyright (c) 2015-2016 Hanns Holger Rutz. All rights reserved.
  *
  *  This software is published under the GNU General Public License v2+
  *
@@ -28,6 +28,8 @@ import processing.{event => pe}
 import scala.annotation.switch
 
 object Video {
+  val DEVICE_NONE = "none"
+
   case class Config(device: String = "/dev/video0", listDevices: Boolean = false,
                     deviceWidth: Int = 1920, deviceHeight: Int = 1080, fps: Int = 24,
                     screenWidth: Int = 1024, screenHeight: Int = 768,
@@ -104,7 +106,9 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] val WINDOW_WIDTH  = math.min(VIDEO_WIDTH , config.screenWidth ) // VIDEO_WIDTH  / 2
   private[this] val WINDOW_HEIGHT = math.min(VIDEO_HEIGHT, config.screenHeight) // VIDEO_HEIGHT / 2
   private[this] val WINDOW_SIZE   = WINDOW_WIDTH * WINDOW_HEIGHT
-  private[this] val BUF_SIZE      = WINDOW_SIZE.nextPowerOfTwo
+  private[this] val _BUF_SIZE     = WINDOW_SIZE.nextPowerOfTwo
+
+  def bufSize: Int = _BUF_SIZE
 
   private[this] val VIDEO_FIT_SCALE = {
     val hScale  = WINDOW_WIDTH .toFloat / VIDEO_WIDTH
@@ -117,11 +121,13 @@ final class Video(config: Video.Config) extends PApplet {
 
   // private[this] val SCAN  = VIDEO_WIDTH - WINDOW_WIDTH
 
-  private[this] var camImage: PImage = _
+  private[this] var _camImage: PImage = _
   private[this] var cam: Capture = _
 
-  private[this] val buf1    = new Array[Float](BUF_SIZE)
-  private[this] val buf2    = new Array[Float](BUF_SIZE)
+  def camImage: PImage = _camImage
+
+  private[this] val buf1    = new Array[Float](_BUF_SIZE)
+  private[this] val buf2    = new Array[Float](_BUF_SIZE)
   // private[this] val imgTmp  = new PImage(WINDOW_WIDTH, WINDOW_HEIGHT, PConstants.RGB /* ARGB */)
   private[this] val imgOut  = new PImage(WINDOW_WIDTH, WINDOW_HEIGHT, PConstants.RGB /* ARGB */)
 
@@ -153,11 +159,13 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] val noiseBuf        = new Array[Float](0x20000)
 
   private[this] val FADE_DUR        = config.fadeDur // 60.0
-  private[this] val FADE_FACTOR     = BUF_SIZE.pow(1.0 / (FADE_DUR * VIDEO_FPS))
+  private[this] val FADE_FACTOR     = _BUF_SIZE.pow(1.0 / (FADE_DUR * VIDEO_FPS))
   // private[this] val FADE_STEP     = BUF_SIZE / (FADE_DUR * VIDEO_FPS)
 
   private[this] var stopTime        = 0L
   private[this] var nextEvent       = Long.MaxValue
+  
+  def numAlgorithms: Int = NUM_ALGORITHMS
 
   private def clipFrames(): Unit = {
     W1  = W1.clip(8, WINDOW_WIDTH )
@@ -181,7 +189,7 @@ final class Video(config: Video.Config) extends PApplet {
 
   private def setRenderMode(b: Boolean): Unit = {
     renderMode = b
-    if (renderMode) noCursor() else cursor()
+    if (renderMode && cam != null) noCursor() else cursor()
   }
 
   private def updateNoise(): Unit = {
@@ -194,9 +202,14 @@ final class Video(config: Video.Config) extends PApplet {
 
   override def setup(): Unit = {
     size(WINDOW_WIDTH, WINDOW_HEIGHT)
-    cam = new Capture(this, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_DEVICE, VIDEO_FPS)
-    camImage = cam
-    cam.start()
+    if (VIDEO_DEVICE == Video.DEVICE_NONE) {
+      _camImage = new PImage(VIDEO_WIDTH, VIDEO_HEIGHT)
+      noLoop()
+    } else {
+      cam = new Capture(this, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_DEVICE, VIDEO_FPS)
+      _camImage = cam
+      cam.start()
+    }
     // noLoop()
     imgOut.loadPixels()
   }
@@ -204,7 +217,7 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] var bufShift = 0
 
   private[this] def crop(x: Int, y: Int, w: Int, h: Int, buf: Array[Float]): Unit = {
-    imgOut.copy(camImage, x, y, w, h, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+    imgOut.copy(_camImage, x, y, w, h, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
     imgOut.loadPixels()
     val pixIn = imgOut.pixels
 
@@ -212,7 +225,7 @@ final class Video(config: Video.Config) extends PApplet {
     var j   = 0
     var k   = bufShift
     val ws  = WINDOW_SIZE
-    val bs  = BUF_SIZE
+    val bs  = _BUF_SIZE
     while (j < ws) {
       val rgbIn = pixIn(j)
       // pix(i) = pix(i) ^ 0xFFFFFF
@@ -244,30 +257,36 @@ final class Video(config: Video.Config) extends PApplet {
 //    imgOut.copy(cam, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
 //  }
 
-  private[this] var previousAlgorithm = ALGORITHM
-  private[this] var fadingAlgorithm   = ALGORITHM
+  private[this] var _previousAlgorithm = ALGORITHM
+  private[this] var _fadingAlgorithm   = ALGORITHM
+  
+  def previousAlgorithm: Int = _previousAlgorithm
+  def previousAlgorithm_=(value: Int): Unit = _previousAlgorithm = value
+
+  def fadingAlgorithm: Int = _fadingAlgorithm
+  def fadingAlgorithm_=(value: Int): Unit = _fadingAlgorithm = value
 
   private[this] val algorithmUrn =
     new Urn[Int](0 until NUM_ALGORITHMS, infinite = true)(
       new util.Random(if (config.seed == -1L) System.currentTimeMillis() else config.seed))
 
-  private def log(what: => String): Unit = if (config.logging) println(what)
+  private[this] def log(what: => String): Unit = if (config.logging) println(what)
 
-  private def checkNextEvent(): Unit =
-    if (!isFading && ALGORITHM != fadingAlgorithm) {
-      previousAlgorithm = fadingAlgorithm
-      fadingAlgorithm   = ALGORITHM
-      currentRun        = 1.0
-      log(s"Next fade from $previousAlgorithm to $fadingAlgorithm")
+  private[this] def checkNextEvent(): Unit =
+    if (!isFading && ALGORITHM != _fadingAlgorithm) {
+      _previousAlgorithm = _fadingAlgorithm
+      _fadingAlgorithm   = ALGORITHM
+      _currentRun        = 1.0
+      log(s"Next fade from ${_previousAlgorithm} to ${_fadingAlgorithm}")
     }
 
-  private def setAlgorithm(id: Int): Unit = {
+  private[this] def setAlgorithm(id: Int): Unit = {
     ALGORITHM = id
     log(s"setAlgorithm($id)")
     checkNextEvent()
   }
 
-  private def runAlgorithm(id: Int, start: Int, stop: Int): Unit = {
+  private[this] def runAlgorithm(id: Int, start: Int, stop: Int): Unit = {
     var i = start
     (id: @switch) match {
       case 0 =>
@@ -320,7 +339,7 @@ final class Video(config: Video.Config) extends PApplet {
     }
   }
 
-  private def startEvent(): Unit = {
+  private[this] def startEvent(): Unit = {
     val now   = System.currentTimeMillis()
     stopTime  = now + (config.totalDur * 1000).toLong
     nextEvent = now
@@ -330,41 +349,51 @@ final class Video(config: Video.Config) extends PApplet {
 
   private[this] val timeFormat = new SimpleDateFormat("hh:mm:ss.SSS")
 
-  private def formatTime(n: Long): String = timeFormat.format(new java.util.Date(n))
+  private[this] def formatTime(n: Long): String = timeFormat.format(new java.util.Date(n))
 
-  private def mkNextEvent(): Unit = {
-    val now   = System.currentTimeMillis()
+  private[this] def mkNextEvent(): Unit = {
+    // val now   = System.currentTimeMillis()
     nextEvent = nextEvent + (config.intervalDur * 1000).toLong
     log(s"mkNextEvent - ${formatTime(nextEvent)}")
     if (nextEvent >= stopTime) stopEvent()
     setAlgorithm(algorithmUrn.next())
   }
 
-  private def stopEvent(): Unit = {
+  private[this] def stopEvent(): Unit = {
     log("stopEvent")
     nextEvent = Long.MaxValue
   }
 
-  private[this] var currentRun: Double = BUF_SIZE // 1.0
+  private[this] var _currentRun: Double = _BUF_SIZE // 1.0
 
-  private def isFading: Boolean = currentRun < BUF_SIZE
+  def currentRun: Double = _currentRun
+  def currentRun_=(value: Double): Unit = _currentRun = value
 
-  private def renderFrame(): Unit = {
+  private[this] def isFading: Boolean = _currentRun < _BUF_SIZE
+
+  private[this] var ADVANCE = true
+
+  def advance: Boolean = ADVANCE
+  def advance_=(value: Boolean): Unit = ADVANCE = value
+
+  private[this] def renderFrame(): Unit = {
     crop(x = X1, y = Y1, w = W1, h = H1, buf = buf1)
     crop(x = X2, y = Y2, w = W2, h = H2, buf = buf2)
 
-    val bs = BUF_SIZE
+    val bs = _BUF_SIZE
     Wavelet.fwdTransform(buf1, bs, WAVELET)
     Wavelet.fwdTransform(buf2, bs, WAVELET)
 
     if (isFading) {
-      val cr = currentRun.toInt - 1
-      runAlgorithm(id = previousAlgorithm, start = cr, stop = bs)
-      runAlgorithm(id = fadingAlgorithm  , start = 0 , stop = cr)
-      currentRun *= FADE_FACTOR
-      checkNextEvent()
+      val cr = _currentRun.toInt - 1
+      runAlgorithm(id = _previousAlgorithm, start = cr, stop = bs)
+      runAlgorithm(id = _fadingAlgorithm  , start = 0 , stop = cr)
+      if (ADVANCE) {
+        _currentRun *= FADE_FACTOR
+        checkNextEvent()
+      }
     } else {
-      runAlgorithm(id = fadingAlgorithm, start = 0, stop = bs)
+      runAlgorithm(id = _fadingAlgorithm, start = 0, stop = bs)
     }
 
     // var MIN = Float.PositiveInfinity
@@ -402,7 +431,7 @@ final class Video(config: Video.Config) extends PApplet {
       var j = (java.lang.Math.random() * 0x20000).toInt
       var k = bufShift
       val ws = WINDOW_SIZE
-      val bs = BUF_SIZE
+      val bs = _BUF_SIZE
       while (i < ws) {
         j = (j + 1) % 0x20000
         buf1(k) += noiseBuf(j)
@@ -447,13 +476,15 @@ final class Video(config: Video.Config) extends PApplet {
     if (renderMode) {
       renderFrame()
       drawRender()
-    } else drawAdjustment()
+    } else {
+      drawAdjustment()
+    }
   }
 
-  private def red  (): Unit = stroke(0xFF, 0x00, 0x00)
-  private def green(): Unit = stroke(0x00, 0xC0, 0x00)
+  private[this] def red  (): Unit = stroke(0xFF, 0x00, 0x00)
+  private[this] def green(): Unit = stroke(0x00, 0xC0, 0x00)
 
-  private def drawRender(): Unit = {
+  private[this] def drawRender(): Unit = {
     val w = getWidth
     val h = getHeight
     val x = (w - WINDOW_WIDTH ) >> 1
@@ -461,12 +492,12 @@ final class Video(config: Video.Config) extends PApplet {
     image(imgOut, x, y)
   }
 
-  private def drawAdjustment(): Unit = {
+  private[this] def drawAdjustment(): Unit = {
     val w = getWidth
     val h = getHeight
     val x = (w - VIDEO_FIT_W) / 2
     val y = (h - VIDEO_FIT_H) / 2
-    image(camImage, x, y, VIDEO_FIT_W, VIDEO_FIT_H)
+    image(_camImage, x, y, VIDEO_FIT_W, VIDEO_FIT_H)
 
     translate(x, y)
     scale(VIDEO_FIT_SCALE)
@@ -491,7 +522,7 @@ final class Video(config: Video.Config) extends PApplet {
     if (renderMode) keyPressedRender(e) else keyPressedAdjust(e)
   }
 
-  private def keyPressedAdjust(e: pe.KeyEvent): Unit = {
+  private[this] def keyPressedAdjust(e: pe.KeyEvent): Unit = {
     val amt = if (e.isShiftDown) 4 else 1
     e.getKeyCode match {
       case KeyEvent.VK_A => // exit adjustment mode
@@ -536,7 +567,7 @@ final class Video(config: Video.Config) extends PApplet {
     clipFrames()
   }
     
-  private def keyPressedRender(e: pe.KeyEvent): Unit =
+  private[this] def keyPressedRender(e: pe.KeyEvent): Unit =
     if (e.isControlDown) {
       if (e.getKeyCode == KeyEvent.VK_F && e.isShiftDown) { // toggle full-screen
         if (frame != null) {
@@ -554,10 +585,10 @@ final class Video(config: Video.Config) extends PApplet {
 //          NORMALIZE = !NORMALIZE
 //          println(s"normalize = ${if (NORMALIZE) "on" else "off"}")
         case KeyEvent.VK_ESCAPE =>
-          previousAlgorithm = NUM_ALGORITHMS
-          fadingAlgorithm   = NUM_ALGORITHMS
+          _previousAlgorithm = NUM_ALGORITHMS
+          _fadingAlgorithm   = NUM_ALGORITHMS
           ALGORITHM         = NUM_ALGORITHMS
-          currentRun        = BUF_SIZE
+          _currentRun        = _BUF_SIZE
           nextEvent         = Long.MaxValue
 
         case KeyEvent.VK_ENTER => startEvent()
