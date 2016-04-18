@@ -47,3 +47,5 @@ between these two modes.
 - <kbd>Down</kbd> decrease noise
 - <kbd>1</kbd> to <kbd>9</kbd> select algorithm
 - <kbd>0</kbd> select black algorithm 
+- <kbd>Control</kbd>-<kbd>Shift</kbd>-<kbd>F</kbd> toggle full screen
+- <kbd>Control</kbd>-<kbd>Q</kbd> quit
