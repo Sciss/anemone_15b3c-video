@@ -1,6 +1,6 @@
 # anemone_15b3c-video
 
-(C)opyright 2015&ndash2016 Hanns Holger Rutz. All rights reserved. Published under
+(C)opyright 2015&ndash;2016 Hanns Holger Rutz. All rights reserved. Published under
 the GNU General Public License v2+.
 
 <img src="screenshot.jpg" alt="screenshot" width="512" height="384"/>
