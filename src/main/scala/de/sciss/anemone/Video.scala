@@ -35,7 +35,7 @@ object Video {
                     x2: Int = -1, y2: Int = -1, w2: Int = -1, h2: Int = -1,
                     fadeDur: Double = 60, noise: Double = 0.1, wavelet: Int = 8,
                     intervalDur: Double = 3 * 60 + 10, totalDur: Double = 15 * 60 + 10,
-                    seed: Long = 0L /* -1L */, logging: Boolean = false)
+                    seed: Long = 0L /* -1L */, logging: Boolean = false, fast: Boolean = false)
 
   def main(args: Array[String]) = {
     val parser = new scopt.OptionParser[Config]("anemone_15b3c-video") {
@@ -65,6 +65,7 @@ object Video {
         case (v, c) => c.copy(totalDur = v) }
       opt[Long  ]("seed") text "RNG seed for algorithm selection (-1 = auto)" action { case (v, c) => c.copy(seed = v) }
       opt[Unit  ]('v', "log"  ) text "enable debug logging" action { case (_, c) => c.copy(logging = true) }
+      opt[Unit  ]('f', "fast" ) text "enable fast refresh" action { case (_, c) => c.copy(fast = true) }
     }
     parser.parse(args, Config()).fold(sys.exit(1)) { config =>
       if (config.listDevices) {
@@ -116,7 +117,9 @@ final class Video(config: Video.Config) extends PApplet {
 
   // private[this] val SCAN  = VIDEO_WIDTH - WINDOW_WIDTH
 
+  private[this] var camImage: PImage = _
   private[this] var cam: Capture = _
+
   private[this] val buf1    = new Array[Float](BUF_SIZE)
   private[this] val buf2    = new Array[Float](BUF_SIZE)
   // private[this] val imgTmp  = new PImage(WINDOW_WIDTH, WINDOW_HEIGHT, PConstants.RGB /* ARGB */)
@@ -192,15 +195,16 @@ final class Video(config: Video.Config) extends PApplet {
   override def setup(): Unit = {
     size(WINDOW_WIDTH, WINDOW_HEIGHT)
     cam = new Capture(this, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_DEVICE, VIDEO_FPS)
+    camImage = cam
     cam.start()
-    noLoop()
+    // noLoop()
     imgOut.loadPixels()
   }
 
   private[this] var bufShift = 0
 
   private[this] def crop(x: Int, y: Int, w: Int, h: Int, buf: Array[Float]): Unit = {
-    imgOut.copy(cam, x, y, w, h, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+    imgOut.copy(camImage, x, y, w, h, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
     imgOut.loadPixels()
     val pixIn = imgOut.pixels
 
@@ -231,7 +235,7 @@ final class Video(config: Video.Config) extends PApplet {
   }
 
   // N.B.: This seems to happen _outside_ of AWT event loop
-  def captureEvent(c: Capture): Unit = {
+  def captureEvent(c: Capture): Unit = if (!config.fast) {
     c.read()
     redraw()
   }
@@ -432,7 +436,8 @@ final class Video(config: Video.Config) extends PApplet {
   }
 
   override def draw(): Unit = {
-    // if (cam.available()) cam.read()
+    if (config.fast && cam.available()) cam.read()
+
     val w = getWidth
     val h = getHeight
     fill(0f)
@@ -461,7 +466,7 @@ final class Video(config: Video.Config) extends PApplet {
     val h = getHeight
     val x = (w - VIDEO_FIT_W) / 2
     val y = (h - VIDEO_FIT_H) / 2
-    image(cam, x, y, VIDEO_FIT_W, VIDEO_FIT_H)
+    image(camImage, x, y, VIDEO_FIT_W, VIDEO_FIT_H)
 
     translate(x, y)
     scale(VIDEO_FIT_SCALE)
