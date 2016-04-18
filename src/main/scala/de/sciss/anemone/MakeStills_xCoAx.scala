@@ -30,7 +30,7 @@ object MakeStills_xCoAx extends App with Runnable {
   def run(): Unit = {
     val base    = userHome / "Documents" / "projects" / "xCoAx2016" / "anemone"
     val photos  = base / "photos"
-    val p1      = photos / "test.jpg" // DSC01627m.jpg"
+    val p1      = photos / "test3.jpg" // DSC01627m.jpg"
 
     val cfg = Video.Config(
       device = Video.DEVICE_NONE,
