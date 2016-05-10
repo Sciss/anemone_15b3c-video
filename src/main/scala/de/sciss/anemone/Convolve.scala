@@ -101,7 +101,9 @@ object Convolve extends App {
     new Convolve(config)
   }
 
-  final case class Gain(min: Double, max: Double)
+  final case class Gain(min: Double, max: Double) {
+    override def toString = f"Gain(min = $min%1.2f, max = $max%1.2f)"
+  }
 }
 final class Convolve(config: Convolve.Config) {
   import Convolve.Gain
@@ -272,11 +274,19 @@ final class Convolve(config: Convolve.Config) {
           } else {
             var xi = 0
             while (xi < winSize) {
-              var yi = 0
-              while (yi < winSize) {
-                val d = b1(yi)(xi) * win(yi) * win(xi)
-                b3(y + yi)(x + xi) += d
-                yi += 1
+              val x1 = x + xi - wh
+              if (x1 >= 0 && x1 < w) {
+                val x2 = if (xi >= wh) xi - wh else kernel - 1 - xi
+                var yi = 0
+                while (yi < winSize) {
+                  val y1 = y + yi - wh
+                  if (y1 >= 0 && y1 < h) {
+                    val y2 = if (yi >= wh) yi - wh else kernel - 1 - yi
+                    val d = b1(y2)(x2) * win(yi) * win(xi)
+                    b3(y1)(x1) += d
+                  }
+                  yi += 1
+                }
               }
               xi += 1
             }
@@ -340,6 +350,7 @@ final class Convolve(config: Convolve.Config) {
       val agc = if (frame == startFrame) 0.0 else config.agcLag
       _gain = renderFrame(fInA = fInA, fInB = fInB, fOut = fOut, agc = agc, prevGain = _gain)
       println()
+      println(_gain)
     }
   }
   sys.exit()
