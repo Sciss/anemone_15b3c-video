@@ -1,6 +1,7 @@
 package de.sciss.anemone
 
 import java.awt.Color
+import java.awt.geom.AffineTransform
 
 import edu.emory.mathcs.jtransforms.fft.DoubleFFT_2D
 import javax.imageio.ImageIO
@@ -17,8 +18,10 @@ object Convolve extends App {
   val outDir  = file("conv_image_out")
   val inDir1  = userHome / "Documents"/"projects"/"Anemone"
   val inDir2  = userHome / "Documents"/"projects"/"Langzeitbelichtung"
-  val p1      = inDir1 / "burned4"/"video"/"anemone-150916-1cm.jpg"
-  val p2      = inDir2 / "material"/"frame-245_crop.jpg"
+  // val p1      = inDir1 / "burned4"/"video"/"anemone-150916-1cm.jpg"
+  val p1      = inDir1 / "burned4"/"video"/"vlcsnap-2015-09-16-1.png"
+  // val p2      = inDir2 / "material"/"frame-245_crop.jpg"
+  val p2      = inDir2 / "material"/"frame-245.png"
   val pOut    = outDir/ "out.png"
 
   if (!outDir.exists()) outDir.mkdirs()
@@ -69,13 +72,13 @@ object Convolve extends App {
     }
   }
 
-  def fillChannel(in: Array[Array[Double]], out: BufferedImage, chan: Int, scale: Double = 1.0): Unit = {
+  def fillChannel(in: Array[Array[Double]], out: BufferedImage, chan: Int, add: Double = 0.0, mul: Double = 1.0): Unit = {
     val shift = chan * 8
     val mask  = ~(0xFF << shift)
     for (y <- in.indices) {
       val v = in(y)
       for (x <- v.indices) {
-        val d = v(x) * scale
+        val d = (v(x) + add) * mul
         val i = (d.clip(0, 1) * 0xFF + 0.5).toInt << shift
         val j = out.getRGB(x, y)
         val k = j & mask | i
@@ -101,7 +104,7 @@ object Convolve extends App {
     val i1  = ImageIO.read(p1)
     val i2  = ImageIO.read(p2)
 
-    val af  = AudioFile.openRead("hp7.aif")
+    val af  = AudioFile.openRead("filters/hp7.aif")
     val afb = af.buffer(af.numFrames.toInt)
     af.read(afb)
     af.close()
@@ -177,7 +180,7 @@ object Convolve extends App {
     val max = bCh.map(b1 => b1.map(_.max).max).max
     val gain = 1.0/max
     bCh.zipWithIndex.foreach { case (b1, chan) =>
-      fillChannel(b1, i3 /* i1 */, chan = chan, scale = gain)
+      fillChannel(b1, i3 /* i1 */, chan = chan, mul = gain)
     }
 
     ImageIO.write(i3 /* i1 */, "png", pOut)
@@ -235,7 +238,7 @@ object Convolve extends App {
     val max = bCh.map(b1 => b1.map(_.max).max).max
     val gain = 1.0/max
     bCh.zipWithIndex.foreach { case (b1, chan) =>
-      fillChannel(b1, i3 /* i1 */, chan = chan, scale = gain)
+      fillChannel(b1, i3 /* i1 */, chan = chan, mul = gain)
     }
 
     ImageIO.write(i3 /* i1 */, "png", pOut)
@@ -243,12 +246,17 @@ object Convolve extends App {
 
   def perform3(): Unit = {
     val i1  = ImageIO.read(p1)
-    val i2  = ImageIO.read(p2)
+    val i2a = ImageIO.read(p2)
+    val i2  = new BufferedImage(1920, 1080, BufferedImage.TYPE_INT_ARGB)
+    val gTmp1 = i2.createGraphics()
+    val atT = AffineTransform.getRotateInstance(math.Pi, 1920/2, 1080/2 + 64)
+    gTmp1.drawImage(i2a, atT, null)
+    gTmp1.dispose()
 
     val kernelSize = 32
     val kh = kernelSize/2
 
-    val af  = AudioFile.openRead("hp7.aif")
+    val af  = AudioFile.openRead("filters/hp6.aif")
     val afb = af.buffer(af.numFrames.toInt)
     af.read(afb)
     af.close()
@@ -258,15 +266,15 @@ object Convolve extends App {
     val h0 = i1.getHeight
     // require(w0 == i2.getWidth && h0 == i2.getHeight)
     // require(w0.isPowerOfTwo && h0.isPowerOfTwo)
-    val w = w0 // .nextPowerOfTwo
-    val h = h0 // .nextPowerOfTwo
+    val w = w0 // 512 // 256 // w0 // .nextPowerOfTwo
+    val h = h0 // 512 // 256 // h0 // .nextPowerOfTwo
 
     val fltLen  = flt.length
     val fltLenH = fltLen >> 1
     val bFlt = Array.tabulate(kernelSize) { y =>
       Array.tabulate(kernelSize) { x =>
-        val x0 = (if (x > kernelSize/2) x - kernelSize else x) + fltLenH
-        val y0 = (if (y > kernelSize/2) y - kernelSize else y) + fltLenH
+        val x0 = (if (x > kh) x - kernelSize else x) + fltLenH
+        val y0 = (if (y > kh) y - kernelSize else y) + fltLenH
         if (x0 >= 0 && y0 >= 0 && x0 < fltLen && y0 < fltLen)
           flt(x0) * flt(y0)
         else
@@ -274,7 +282,9 @@ object Convolve extends App {
       }
     }
 
-    val fft = new DoubleFFT_2D(kernelSize, kernelSize)
+    // val fft = new DoubleFFT_2D(kernelSize, kernelSize)
+    // val ffts = Array.fill(3)(new DoubleFFT_2D(kernelSize, kernelSize))
+    val ffts = { val fft = new DoubleFFT_2D(kernelSize, kernelSize); Array.fill(3)(fft) }
 
     val i3 = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
     val gTmp = i3.createGraphics()
@@ -282,7 +292,7 @@ object Convolve extends App {
     gTmp.fillRect(0, 0, w, h)
     gTmp.dispose()
 
-    fft.realForward(bFlt)
+    ffts(0).realForward(bFlt)
 
     val bCh0 = Array.ofDim[Double](3, h, w)
 
@@ -297,26 +307,27 @@ object Convolve extends App {
 
     for (x <- 0 until w) {
       for (y <- 0 until h) {
-        val noise = math.random * 0.1
-        import ExecutionContext.Implicits.global
-        val futures = (0 until 3).map { chan =>
-          Future {
-            blocking {
+        val noise = math.random.linlin(0, 1, -1, 1)
+        // import ExecutionContext.Implicits.global
+        /* val futures = */ (0 until 3).foreach /* map */ { chan =>
+          // Future {
+            // blocking {
               val b1 = bufs1(chan)
               val b2 = bufs2(chan)
+              val fft = ffts(chan)
               extractChannel2(i1, arr = b1, x = x - kh, y = y - kh, w = kernelSize, h = kernelSize, chan = chan)
               extractChannel2(i2, arr = b2, x = x - kh, y = y - kh, w = kernelSize, h = kernelSize, chan = chan)
               fft.realForward(b1)
               fft.realForward(b2)
-              mulC(b1, b2  , scale = 1.0)
-              // mulC(b1, bFlt, scale = 1.0)
+              mulC(b1, b2, scale = 1.0)
+              mulC(b1, bFlt, scale = 1.0)
               fft.realInverse(b1, true)
               val d = b1(0)(0)
               bCh0(chan)(y)(x) = d + noise
-            }
-          }
+            // }
+          // }
         }
-        Await.result(Future.sequence(futures), Duration.Inf)
+        // Await.result(Future.sequence(futures), Duration.Inf)
 
         val prog = ((x * h + y + 1) * progScale).toInt
         while (lastProg < prog) {
@@ -328,10 +339,33 @@ object Convolve extends App {
 
     val bCh = bCh0 // .map(_.clone())
 
+    val min = bCh.map(b1 => b1.map(_.min).min).min
     val max = bCh.map(b1 => b1.map(_.max).max).max  // = max(max(red), max(green), max(blue))
-    val gain = 1.0/max
+    println(s"max = $max")
+    // val gain = 1.0/max
+    val mul  = 1.0/(max-min)
+    val add  = -min
+
+    def levels(in: Double, /* lo: Double, hi: Double, */ gamma: Double): Double = {
+      val clip = in.clip(0, 1)
+      // val clip = in.clip(lo, hi).linlin(lo, hi, 0, 1)
+      val easy = clip.linlin(0, 1, math.Pi/2, 0).cos.squared // .linlin(0, 1, from, to)
+      easy.pow(gamma)
+    }
+
+    bCh.foreach { b1 =>
+      b1.foreach { row =>
+        var i = 0
+        while (i < row.length) {
+          val a = (row(i) + add) * mul
+          row(i) = levels(a, /* lo = 0.25, hi = 0.75, */ gamma = 2)
+          i += 1
+        }
+      }
+    }
+
     bCh.zipWithIndex.foreach { case (b1, chan) =>
-      fillChannel(b1, i3 /* i1 */, chan = chan, scale = gain)
+      fillChannel(b1, i3 /* i1 */, chan = chan /* , add = add, mul = mul */)
     }
 
     ImageIO.write(i3 /* i1 */, "png", pOut)
