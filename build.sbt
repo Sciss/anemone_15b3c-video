@@ -14,15 +14,17 @@ lazy val scoptVersion       = "3.4.0"
 lazy val kollFlitzVersion   = "0.2.0"
 lazy val swingPlusVersion   = "0.2.1"
 lazy val fileUtilVersion    = "1.1.1"
+lazy val audioFileVersion   = "1.4.5"
 
 libraryDependencies ++= Seq(
-  "org.processing"   %  "video"     % processingVersion,   // exclude("net.java.dev.jna", "jna") - doesn't work
-  "de.sciss"         %% "scissdsp"  % scissDSPVersion,
-  "de.sciss"         %% "numbers"   % numbersVersion,
-  "com.github.scopt" %% "scopt"     % scoptVersion,
-  "de.sciss"         %% "kollflitz" % kollFlitzVersion,
-  "de.sciss"         %% "swingplus" % swingPlusVersion,
-  "de.sciss"         %% "fileutil"  % fileUtilVersion
+  "org.processing"   %  "video"           % processingVersion,   // exclude("net.java.dev.jna", "jna") - doesn't work
+  "de.sciss"         %% "scissdsp"        % scissDSPVersion,
+  "de.sciss"         %% "numbers"         % numbersVersion,
+  "com.github.scopt" %% "scopt"           % scoptVersion,
+  "de.sciss"         %% "kollflitz"       % kollFlitzVersion,
+  "de.sciss"         %% "swingplus"       % swingPlusVersion,
+  "de.sciss"         %% "fileutil"        % fileUtilVersion,
+  "de.sciss"         %% "scalaaudiofile"  % audioFileVersion
 )
 
 dependencyOverrides += "net.java.dev.jna" % "jna" % jnaVersion
