@@ -5,6 +5,7 @@ import java.awt.geom.AffineTransform
 import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 
+import de.sciss.dsp
 import de.sciss.file._
 import de.sciss.numbers.Implicits._
 import de.sciss.synth.io.AudioFile
@@ -90,8 +91,12 @@ object Convolve extends App {
   p.parse(args, Config()).fold(sys.exit(1)) { config =>
     new Convolve(config)
   }
+
+  final case class Gain(min: Double, max: Double)
 }
 final class Convolve(config: Convolve.Config) {
+  import Convolve.Gain
+
   def extractChannel(in: BufferedImage, chan: Int): Array[Array[Double]] = {
     val shift = chan * 8
     Array.tabulate(in.getHeight) { y =>
@@ -162,7 +167,7 @@ final class Convolve(config: Convolve.Config) {
     }
   }
 
-  import config.kernel
+  import config.{kernel, winSize}
 
   private[this] val fft       = new DoubleFFT_2D(kernel, kernel)
   private[this] val gammaInv  = 1.0/config.gamma
@@ -174,8 +179,6 @@ final class Convolve(config: Convolve.Config) {
     val easy = clip.linlin(0, 1, math.Pi/2, 0).cos.squared  // 'easy in easy out'
     easy.pow(gammaInv)
   }
-
-  final case class Gain(min: Double, max: Double)
 
   val bFltOpt = config.filter.map { filtF =>
     val af  = AudioFile.openRead(filtF)
@@ -202,6 +205,10 @@ final class Convolve(config: Convolve.Config) {
 
   private[this] val b1 = Array.ofDim[Double](kernel, kernel)
   private[this] val b2 = Array.ofDim[Double](kernel, kernel)
+
+  private[this] val wh = winSize/2
+
+  val win = dsp.Window.Hanning.fill(null, 0, winSize)
 
   def renderFrame(fInA: File, fInB: File, fOut: File, agc: Double, prevGain: Gain): Gain = {
     val i1  = ImageIO.read(fInA)
@@ -230,12 +237,16 @@ final class Convolve(config: Convolve.Config) {
 
     println("_" * 40)
     var lastProg = 0
-    val progScale = 40.0 / (w * h)
+    val w1 = w - winSize
+    val h1 = h - winSize
+    val progScale = 40.0 / (w1 * h1)
 
-    for (x <- 0 until w) {
-      for (y <- 0 until h) {
-        val noise = math.random.linlin(0, 1, -config.noise, config.noise)
-        (0 until 3).foreach { chan =>
+    for (x <- 0 until w1 by wh) {
+      for (y <- 0 until h1 by wh) {
+        // val noise = math.random.linlin(0, 1, -config.noise, config.noise)
+        for (chan <- 0 until 3) {
+          val b3 = bCh0(chan)
+
           extractChannel2(i1, arr = b1, x = x - kh, y = y - kh, w = kernel, h = kernel, chan = chan)
           extractChannel2(i2, arr = b2, x = x - kh, y = y - kh, w = kernel, h = kernel, chan = chan)
           fft.realForward(b1)
@@ -245,16 +256,32 @@ final class Convolve(config: Convolve.Config) {
             mulC(b1, bFlt, scale = 1.0)
           }
           fft.realInverse(b1, true)
-          val d = b1(0)(0)
-          bCh0(chan)(y)(x) = d + noise
+
+          // val d = b1(0)(0)
+          // bCh0(chan)(y)(x) = d + noise
+
+          var xi = 0
+          while (xi < winSize) {
+            var yi = 0
+            while (yi < winSize) {
+              val d = b1(yi)(xi) * win(yi) * win(xi)
+              b3(y + yi)(x + xi) += d
+              yi += 1
+            }
+            xi += 1
+          }
         }
 
-        val prog = ((x * h + y + 1) * progScale).toInt
+        val prog = ((x * h1 + y + 1) * progScale).toInt
         while (lastProg < prog) {
-          print("#")
+          print('#')
           lastProg += 1
         }
       }
+    }
+    while (lastProg < 40) {
+      print('#')
+      lastProg += 1
     }
 
     val bCh = bCh0 // .map(_.clone())
@@ -266,13 +293,13 @@ final class Convolve(config: Convolve.Config) {
     val mul  = 1.0/(max-min)
     val add  = -min
 
-    bCh.foreach { b1 =>
-      b1.foreach { row =>
-        var i = 0
-        while (i < row.length) {
-          val a = (row(i) + add) * mul
-          row(i) = levels(a)
-          i += 1
+    for (x <- 0 until w) {
+      for (y <- 0 until h) {
+        val noise = math.random.linlin(0, 1, -config.noise, config.noise)
+        for (chan <- 0 until 3) {
+          val row = bCh0(chan)(y)
+          val a = (row(x) + add + noise) * mul
+          row(x) = levels(a)
         }
       }
     }
