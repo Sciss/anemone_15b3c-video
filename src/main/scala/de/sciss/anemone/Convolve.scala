@@ -16,7 +16,8 @@ object Convolve extends App {
                     startFrame: Int = 0, endFrame: Int = 0,
                     frameOffA: Int = 0, frameOffB: Int = 0, gamma: Double = 0.5, kernel: Int = 32,
                     agcLag: Double = 0.9, noise: Double = 1.0, winSize: Int = 4, rotateB: Boolean = false,
-                    shiftB: Int = 0, filter: Option[File] = None)
+                    shiftB: Int = 0, filter: Option[File] = None,
+                    width: Int = 0, height: Int = 0)
 
   val p = new scopt.OptionParser[Config]("Anemone Convolve") {
     arg[File]("input-a")
@@ -75,10 +76,18 @@ object Convolve extends App {
       .text ("Noise amplitude. Default: 1.0)")
       .action   { (v, c) => c.copy(noise = v) }
 
-    opt[Int] ('w', "window")
+    opt[Int] ('i', "window")
       .text ("Window size (must be >= 2; default: 4)")
       .action   { (v, c) => c.copy(winSize = v) }
       .validate {  v     => if (v >= 2) success else failure("window must be >= 2") }
+
+    opt[Int] ('w', "width")
+      .text ("Enforce image width")
+      .action   { (v, c) => c.copy(width = v) }
+
+    opt[Int] ('h', "height")
+      .text ("Enforce image heiht")
+      .action   { (v, c) => c.copy(height = v) }
 
     opt[Unit] ('r', "rotate")
       .text ("Rotate second image")
@@ -208,18 +217,18 @@ final class Convolve(config: Convolve.Config) {
 
   private[this] val wh = winSize/2
 
-  val win = dsp.Window.Hanning.fill(null, 0, winSize)
+  private[this] val win = dsp.Window.Hanning.fill(null, 0, winSize)
 
   def renderFrame(fInA: File, fInB: File, fOut: File, agc: Double, prevGain: Gain): Gain = {
     val i1  = ImageIO.read(fInA)
-    val w   = i1.getWidth
-    val h   = i1.getHeight
+    val w   = if (config.width  > 0) config.width  else i1.getWidth
+    val h   = if (config.height > 0) config.height else i1.getHeight
     val i2a = ImageIO.read(fInB)
     val i2  = if (!config.rotateB && config.shiftB == 0) i2a else {
       val res   = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
       val gTmp1 = res.createGraphics()
       val atT = if (config.rotateB)
-        AffineTransform.getRotateInstance(math.Pi, w/2, h/2 + config.shiftB)
+        AffineTransform.getRotateInstance(math.Pi, i2a.getWidth/2, i2a.getHeight/2 + config.shiftB)
       else
         AffineTransform.getTranslateInstance(0, config.shiftB)
       gTmp1.drawImage(i2a, atT, null)
@@ -236,9 +245,10 @@ final class Convolve(config: Convolve.Config) {
     val bCh0 = Array.ofDim[Double](3, h, w)
 
     println("_" * 40)
-    var lastProg = 0
-    val w1 = w - winSize
-    val h1 = h - winSize
+
+    var lastProg  = 0
+    val w1        = w - winSize
+    val h1        = h - winSize
     val progScale = 40.0 / (w1 * h1)
 
     for (x <- 0 until w1 by wh) {
@@ -246,7 +256,6 @@ final class Convolve(config: Convolve.Config) {
         // val noise = math.random.linlin(0, 1, -config.noise, config.noise)
         for (chan <- 0 until 3) {
           val b3 = bCh0(chan)
-
           extractChannel2(i1, arr = b1, x = x - kh, y = y - kh, w = kernel, h = kernel, chan = chan)
           extractChannel2(i2, arr = b2, x = x - kh, y = y - kh, w = kernel, h = kernel, chan = chan)
           fft.realForward(b1)
@@ -257,18 +266,20 @@ final class Convolve(config: Convolve.Config) {
           }
           fft.realInverse(b1, true)
 
-          // val d = b1(0)(0)
-          // bCh0(chan)(y)(x) = d + noise
-
-          var xi = 0
-          while (xi < winSize) {
-            var yi = 0
-            while (yi < winSize) {
-              val d = b1(yi)(xi) * win(yi) * win(xi)
-              b3(y + yi)(x + xi) += d
-              yi += 1
+          if (wh == 1) {
+             val d = b1(0)(0)
+             b3(y)(x) = d // + noise
+          } else {
+            var xi = 0
+            while (xi < winSize) {
+              var yi = 0
+              while (yi < winSize) {
+                val d = b1(yi)(xi) * win(yi) * win(xi)
+                b3(y + yi)(x + xi) += d
+                yi += 1
+              }
+              xi += 1
             }
-            xi += 1
           }
         }
 
@@ -290,8 +301,8 @@ final class Convolve(config: Convolve.Config) {
     val max0 = bCh.map(b1 => b1.map(_.max).max).max  // = max(max(red), max(green), max(blue))
     val min  = min0 * (1 - agc) + prevGain.min * agc
     val max  = max0 * (1 - agc) + prevGain.max * agc
-    val mul  = 1.0/(max-min)
-    val add  = -min
+    val mul  = if (max == min) 1.0 else 1.0/(max-min)
+    val add  = if (max == min) 0.0 else -min
 
     for (x <- 0 until w) {
       for (y <- 0 until h) {
