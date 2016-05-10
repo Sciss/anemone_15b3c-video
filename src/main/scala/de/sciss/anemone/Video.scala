@@ -135,7 +135,7 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] var Y1 = if (config.y1 < 0) (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2 else config.y1
   private[this] var W1 = if (config.w1 < 0) WINDOW_WIDTH  else config.w1
   private[this] var H1 = if (config.h1 < 0) WINDOW_HEIGHT else config.h1
-  private[this] var X2 = if (config.x2 < 0) VIDEO_WIDTH  - WINDOW_WIDTH else config.x1
+  private[this] var X2 = if (config.x2 < 0) VIDEO_WIDTH  - WINDOW_WIDTH else config.x2
   private[this] var Y2 = if (config.y2 < 0) (VIDEO_HEIGHT - WINDOW_HEIGHT) / 2 else config.y2
   private[this] var W2 = if (config.w2 < 0) WINDOW_WIDTH  else config.w2
   private[this] var H2 = if (config.h2 < 0) WINDOW_HEIGHT else config.h2
