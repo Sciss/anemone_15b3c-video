@@ -164,10 +164,10 @@ final class Convolve(config: Convolve.Config) {
 
   import config.kernel
 
-  val fft       = new DoubleFFT_2D(kernel, kernel)
-  val gammaInv  = 1.0/config.gamma
-  val imgFormat = config.out.ext.toLowerCase
-  val kh        = kernel/2
+  private[this] val fft       = new DoubleFFT_2D(kernel, kernel)
+  private[this] val gammaInv  = 1.0/config.gamma
+  private[this] val imgFormat = config.out.ext.toLowerCase
+  private[this] val kh        = kernel/2
 
   def levels(in: Double): Double = {
     val clip = in.clip(0, 1)
@@ -175,7 +175,7 @@ final class Convolve(config: Convolve.Config) {
     easy.pow(gammaInv)
   }
 
-  case class Gain(min: Double, max: Double)
+  final case class Gain(min: Double, max: Double)
 
   val bFltOpt = config.filter.map { filtF =>
     val af  = AudioFile.openRead(filtF)
@@ -199,6 +199,9 @@ final class Convolve(config: Convolve.Config) {
     fft.realForward(bFlt)
     bFlt
   }
+
+  private[this] val b1 = Array.ofDim[Double](kernel, kernel)
+  private[this] val b2 = Array.ofDim[Double](kernel, kernel)
 
   def renderFrame(fInA: File, fInB: File, fOut: File, agc: Double, prevGain: Gain): Gain = {
     val i1  = ImageIO.read(fInA)
@@ -228,9 +231,6 @@ final class Convolve(config: Convolve.Config) {
     println("_" * 40)
     var lastProg = 0
     val progScale = 40.0 / (w * h)
-
-    val b1 = Array.ofDim[Double](kernel, kernel)
-    val b2 = Array.ofDim[Double](kernel, kernel)
 
     for (x <- 0 until w) {
       for (y <- 0 until h) {
@@ -263,8 +263,6 @@ final class Convolve(config: Convolve.Config) {
     val max0 = bCh.map(b1 => b1.map(_.max).max).max  // = max(max(red), max(green), max(blue))
     val min  = min0 * (1 - agc) + prevGain.min * agc
     val max  = max0 * (1 - agc) + prevGain.max * agc
-    // println(s"max = $max")
-    // val gain = 1.0/max
     val mul  = 1.0/(max-min)
     val add  = -min
 
@@ -289,7 +287,7 @@ final class Convolve(config: Convolve.Config) {
   }
 
   import config._
-  var _gain = Gain(0, 0)
+  private[this] var _gain = Gain(0, 0)
   for (frame <- startFrame to endFrame) {
     def format(f: File, i: Int): File = {
       val name = f.name.format(i)
@@ -303,6 +301,7 @@ final class Convolve(config: Convolve.Config) {
     if (!fOut.exists()) {
       val agc = if (frame == startFrame) 0.0 else config.agcLag
       _gain = renderFrame(fInA = fInA, fInB = fInB, fOut = fOut, agc = agc, prevGain = _gain)
+      println()
     }
   }
   sys.exit()
