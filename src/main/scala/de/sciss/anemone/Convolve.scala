@@ -2,34 +2,96 @@ package de.sciss.anemone
 
 import java.awt.Color
 import java.awt.geom.AffineTransform
-
-import edu.emory.mathcs.jtransforms.fft.DoubleFFT_2D
-import javax.imageio.ImageIO
 import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 
 import de.sciss.file._
 import de.sciss.numbers.Implicits._
-import de.sciss.synth.io.{AudioFile, AudioFileSpec}
-
-import scala.concurrent.{Await, ExecutionContext, Future, blocking}
-import scala.concurrent.duration.Duration
+import de.sciss.synth.io.AudioFile
+import edu.emory.mathcs.jtransforms.fft.DoubleFFT_2D
 
 object Convolve extends App {
-  val outDir  = file("conv_image_out")
-  val inDir1  = userHome / "Documents"/"projects"/"Anemone"
-  val inDir2  = userHome / "Documents"/"projects"/"Langzeitbelichtung"
-  // val p1      = inDir1 / "burned4"/"video"/"anemone-150916-1cm.jpg"
-  val p1      = inDir1 / "burned4"/"video"/"vlcsnap-2015-09-16-1.png"
-  // val p2      = inDir2 / "material"/"frame-245_crop.jpg"
-  val p2      = inDir2 / "material"/"frame-245.png"
-  val pOut    = outDir/ "out.png"
+  case class Config(inA: File = file("in-a"), inB: File = file("in-b"), out: File = file("out"),
+                    startFrame: Int = 0, endFrame: Int = 0,
+                    frameOffA: Int = 0, frameOffB: Int = 0, gamma: Double = 0.5, kernel: Int = 32,
+                    agcLag: Double = 0.9, noise: Double = 1.0, winSize: Int = 4, rotateB: Boolean = false,
+                    shiftB: Int = 0, filter: Option[File] = None)
 
-  if (!outDir.exists()) outDir.mkdirs()
-  if (pOut.exists()) {
-    println(s"Output file '$pOut' already exists. Not overwriting.")
-    sys.exit(1)
+  val p = new scopt.OptionParser[Config]("Anemone Convolve") {
+    arg[File]("input-a")
+      .text ("First input image template (where %d will be replaced by frame index)")
+      .required()
+      .action { (f, c) => c.copy(inA = f) }
+
+    arg[File]("input-b")
+      .text ("Second input image template (where %d will be replaced by frame index)")
+      .required()
+      .action { (f, c) => c.copy(inB = f) }
+
+    arg[File]("output")
+      .text ("Output image template (where %d will be replaced by frame index)")
+      .required()
+      .action { (f, c) => c.copy(out = f) }
+
+    opt[File]('f', "filter")
+      .text ("High pass filter (sound file)")
+      .action { (f, c) => c.copy(filter = Some(f)) }
+
+    opt[Int] ('s', "start-frame")
+      .text ("Start frame index")
+      .action   { (v, c) => c.copy(startFrame = v) }
+      .validate {  v     => if (v >= 0) success else failure("start-frame must be >= 0") }
+
+    opt[Int] ('e', "end-frame")
+      .text ("End frame index")
+      .action   { (v, c) => c.copy(endFrame = v) }
+      .validate {  v     => if (v >= 0) success else failure("end-frame must be >= 0") }
+
+    opt[Int] ("offset-a")
+      .text ("Frame index offset for first image")
+      .action   { (v, c) => c.copy(frameOffA = v) }
+
+    opt[Int] ("offset-b")
+      .text ("Frame index offset for second image")
+      .action   { (v, c) => c.copy(frameOffB = v) }
+
+    opt[Double] ('g', "gamma")
+      .text ("Gamma correction (< 1 darker, > 1 brighter, default: 0.5")
+      .action   { (v, c) => c.copy(gamma = v) }
+      .validate { v => if (v > 0) success else failure("gamma must be > 0") }
+
+    opt[Int] ('k', "kernel")
+      .text ("Convolution kernel size. Must be a power of two. Default: 32")
+      .action   { (v, c) => c.copy(kernel = v) }
+      .validate {  v     => if (v >= 2 && v.isPowerOfTwo) success else failure("kernel must be >= 2 and power of two") }
+
+    opt[Double] ('l', "gain-lag")
+      .text ("ACG lag coefficient (0.0 to 1.0, default: 0.9)")
+      .action   { (v, c) => c.copy(agcLag = v) }
+      .validate {  v     => if (v >= 0 && v <= 1.0) success else failure("gain-lag be >= 0 and <= 1") }
+
+    opt[Double] ('n', "noise")
+      .text ("Noise amplitude. Default: 1.0)")
+      .action   { (v, c) => c.copy(noise = v) }
+
+    opt[Int] ('w', "window")
+      .text ("Window size (must be >= 2; default: 4)")
+      .action   { (v, c) => c.copy(winSize = v) }
+      .validate {  v     => if (v >= 2) success else failure("window must be >= 2") }
+
+    opt[Unit] ('r', "rotate")
+      .text ("Rotate second image")
+      .action   { (v, c) => c.copy(rotateB = true) }
+
+    opt[Int] ('y', "shift-y")
+      .text ("Vertical offset of second image. Default: 0")
+      .action   { (v, c) => c.copy(shiftB = v) }
   }
-
+  p.parse(args, Config()).fold(sys.exit(1)) { config =>
+    new Convolve(config)
+  }
+}
+final class Convolve(config: Convolve.Config) {
   def extractChannel(in: BufferedImage, chan: Int): Array[Array[Double]] = {
     val shift = chan * 8
     Array.tabulate(in.getHeight) { y =>
@@ -100,133 +162,59 @@ object Convolve extends App {
     }
   }
 
-  def perform(): Unit = {
-    val i1  = ImageIO.read(p1)
-    val i2  = ImageIO.read(p2)
+  import config.kernel
 
-    val af  = AudioFile.openRead("filters/hp7.aif")
+  val fft       = new DoubleFFT_2D(kernel, kernel)
+  val gammaInv  = 1.0/config.gamma
+  val imgFormat = config.out.ext.toLowerCase
+  val kh        = kernel/2
+
+  def levels(in: Double): Double = {
+    val clip = in.clip(0, 1)
+    val easy = clip.linlin(0, 1, math.Pi/2, 0).cos.squared  // 'easy in easy out'
+    easy.pow(gammaInv)
+  }
+
+  case class Gain(min: Double, max: Double)
+
+  val bFltOpt = config.filter.map { filtF =>
+    val af  = AudioFile.openRead(filtF)
     val afb = af.buffer(af.numFrames.toInt)
     af.read(afb)
     af.close()
     val flt = afb(0)
 
-    val w0 = i1.getWidth
-    val h0 = i1.getHeight
-    // require(w0 == i2.getWidth && h0 == i2.getHeight)
-    // require(w0.isPowerOfTwo && h0.isPowerOfTwo)
-    val w = w0.nextPowerOfTwo
-    val h = h0.nextPowerOfTwo
-
     val fltLen  = flt.length
     val fltLenH = fltLen >> 1
-    val bFlt = Array.tabulate(h) { y =>
-      Array.tabulate(w) { x =>
-        val x0 = (if (x > w/2) x - w else x) + fltLenH
-        val y0 = (if (y > h/2) y - h else y) + fltLenH
+    val bFlt = Array.tabulate(kernel) { y =>
+      Array.tabulate(kernel) { x =>
+        val x0 = (if (x > kh) x - kernel else x) + fltLenH
+        val y0 = (if (y > kh) y - kernel else y) + fltLenH
         if (x0 >= 0 && y0 >= 0 && x0 < fltLen && y0 < fltLen)
           flt(x0) * flt(y0)
         else
           0.0
       }
     }
-
-    val fft = new DoubleFFT_2D(h, w)
-
-    val i3 = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
-    val gTmp = i3.createGraphics()
-    gTmp.setColor(Color.black)
-    gTmp.fillRect(0, 0, w, h)
-    gTmp.dispose()
-
     fft.realForward(bFlt)
-
-    val bCh0 = (0 until 3).map { chan =>
-//      val b1 = extractChannel(i1, chan)
-//      val b2 = extractChannel(i2, chan)
-      val b1 = extractChannel1(i1, w = w, h = h, chan = chan)
-      val b2 = extractChannel1(i2, w = w, h = h, chan = chan)
-      fft.realForward(b1)
-      fft.realForward(b2)
-      mulC(b1, b2  , scale = 1.0)
-      mulC(b1, bFlt, scale = 1.0)
-      fft.realInverse(b1, true)
-      b1
-    }
-
-    val bCh = bCh0 // .map(_.clone())
-
-//    // high pass
-//    for (y1 <- 0 until h) {
-//      for (x1 <- 0 until w) {
-//        val x0 = (x1 - 1).wrap(0, w-1)
-//        val x2 = (x1 + 1).wrap(0, w-1)
-//        val y0 = (y1 - 1).wrap(0, h-1)
-//        val y2 = (y1 + 1).wrap(0, h-1)
-//
-//        for (ch <- 0 until 3) {
-//          val a = bCh0(ch)
-//          val b = bCh (ch)
-//          val c = a(y1)(x1)
-//          val d =
-//             a(y0)(x0)    + a(y0)(x1)    + a(y0)(x2) +
-//             a(y1)(x0) /* + a(y1)(x1) */ + a(y1)(x2) +
-//             a(y2)(x0)    + a(y2)(x1)    + a(y2)(x2)
-//          val e = c - d/8
-//          b(y1)(x1) = e
-//        }
-//      }
-//    }
-
-    val max = bCh.map(b1 => b1.map(_.max).max).max
-    val gain = 1.0/max
-    bCh.zipWithIndex.foreach { case (b1, chan) =>
-      fillChannel(b1, i3 /* i1 */, chan = chan, mul = gain)
-    }
-
-    ImageIO.write(i3 /* i1 */, "png", pOut)
+    bFlt
   }
 
-  def perform1(): Unit = {
-    val i1  = ImageIO.read(p1)
-    val i2  = ImageIO.read(p2)
-
-    val w0  = i1.getWidth
-    val h0  = i1.getHeight
-    val w   = w0.nextPowerOfTwo
-    val h   = h0.nextPowerOfTwo
-
-    val ins = Seq(i1, i2)
-
-    for (i <- 0 until 2) {
-      val i3 = ins(i)
-      val bCh = Array(0 until 3: _*).map { chan =>
-        val b1 = extractChannel1(i3, w = w, h = h, chan = chan)
-        b1.flatMap(r => r.map(_.toFloat))
-      }
-      val spec = AudioFileSpec(numChannels = 3, sampleRate = 44100.0)
-      val fOut = outDir / s"image-${i+1}.aif"
-      require(!fOut.exists())
-      val af = AudioFile.openWrite(fOut, spec)
-      af.write(bCh, 0, bCh(0).length)
-      af.close()
-    }
-  }
-
-  def perform2(): Unit = {
-    // val af = AudioFile.openRead(outDir / "image-conv.aif")
-    // val af = AudioFile.openRead(outDir / "image-2White.aif")
-    // val af = AudioFile.openRead(outDir / "image-op.aif")
-    val af = AudioFile.openRead(outDir / "image-1Wrp.aif")
-    val i1  = ImageIO.read(p1)
-    val w0  = i1.getWidth
-    val h0  = i1.getHeight
-    val w   = w0.nextPowerOfTwo
-    val h   = h0.nextPowerOfTwo
-    val afb = af.buffer(af.numFrames.toInt)
-    af.read(afb)
-
-    val bCh = (0 until 3).map { chan =>
-      afb(chan).map(_.toDouble).grouped(h).toArray
+  def renderFrame(fInA: File, fInB: File, fOut: File, agc: Double, prevGain: Gain): Gain = {
+    val i1  = ImageIO.read(fInA)
+    val w   = i1.getWidth
+    val h   = i1.getHeight
+    val i2a = ImageIO.read(fInB)
+    val i2  = if (!config.rotateB && config.shiftB == 0) i2a else {
+      val res   = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
+      val gTmp1 = res.createGraphics()
+      val atT = if (config.rotateB)
+        AffineTransform.getRotateInstance(math.Pi, w/2, h/2 + config.shiftB)
+      else
+        AffineTransform.getTranslateInstance(0, config.shiftB)
+      gTmp1.drawImage(i2a, atT, null)
+      gTmp1.dispose()
+      res
     }
 
     val i3 = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
@@ -234,100 +222,32 @@ object Convolve extends App {
     gTmp.setColor(Color.black)
     gTmp.fillRect(0, 0, w, h)
     gTmp.dispose()
-
-    val max = bCh.map(b1 => b1.map(_.max).max).max
-    val gain = 1.0/max
-    bCh.zipWithIndex.foreach { case (b1, chan) =>
-      fillChannel(b1, i3 /* i1 */, chan = chan, mul = gain)
-    }
-
-    ImageIO.write(i3 /* i1 */, "png", pOut)
-  }
-
-  def perform3(): Unit = {
-    val i1  = ImageIO.read(p1)
-    val i2a = ImageIO.read(p2)
-    val i2  = new BufferedImage(1920, 1080, BufferedImage.TYPE_INT_ARGB)
-    val gTmp1 = i2.createGraphics()
-    val atT = AffineTransform.getRotateInstance(math.Pi, 1920/2, 1080/2 + 64)
-    gTmp1.drawImage(i2a, atT, null)
-    gTmp1.dispose()
-
-    val kernelSize = 32
-    val kh = kernelSize/2
-
-    val af  = AudioFile.openRead("filters/hp6.aif")
-    val afb = af.buffer(af.numFrames.toInt)
-    af.read(afb)
-    af.close()
-    val flt = afb(0)
-
-    val w0 = i1.getWidth
-    val h0 = i1.getHeight
-    // require(w0 == i2.getWidth && h0 == i2.getHeight)
-    // require(w0.isPowerOfTwo && h0.isPowerOfTwo)
-    val w = w0 // 512 // 256 // w0 // .nextPowerOfTwo
-    val h = h0 // 512 // 256 // h0 // .nextPowerOfTwo
-
-    val fltLen  = flt.length
-    val fltLenH = fltLen >> 1
-    val bFlt = Array.tabulate(kernelSize) { y =>
-      Array.tabulate(kernelSize) { x =>
-        val x0 = (if (x > kh) x - kernelSize else x) + fltLenH
-        val y0 = (if (y > kh) y - kernelSize else y) + fltLenH
-        if (x0 >= 0 && y0 >= 0 && x0 < fltLen && y0 < fltLen)
-          flt(x0) * flt(y0)
-        else
-          0.0
-      }
-    }
-
-    // val fft = new DoubleFFT_2D(kernelSize, kernelSize)
-    // val ffts = Array.fill(3)(new DoubleFFT_2D(kernelSize, kernelSize))
-    val ffts = { val fft = new DoubleFFT_2D(kernelSize, kernelSize); Array.fill(3)(fft) }
-
-    val i3 = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
-    val gTmp = i3.createGraphics()
-    gTmp.setColor(Color.black)
-    gTmp.fillRect(0, 0, w, h)
-    gTmp.dispose()
-
-    ffts(0).realForward(bFlt)
 
     val bCh0 = Array.ofDim[Double](3, h, w)
 
-    println("_" * 100)
+    println("_" * 40)
     var lastProg = 0
-    val progScale = 100.0 / (w * h)
+    val progScale = 40.0 / (w * h)
 
-    // val processorCount = Runtime.getRuntime.availableProcessors
-
-    val bufs1 = Array.ofDim[Double](3, kernelSize, kernelSize)
-    val bufs2 = Array.ofDim[Double](3, kernelSize, kernelSize)
+    val b1 = Array.ofDim[Double](kernel, kernel)
+    val b2 = Array.ofDim[Double](kernel, kernel)
 
     for (x <- 0 until w) {
       for (y <- 0 until h) {
-        val noise = math.random.linlin(0, 1, -1, 1)
-        // import ExecutionContext.Implicits.global
-        /* val futures = */ (0 until 3).foreach /* map */ { chan =>
-          // Future {
-            // blocking {
-              val b1 = bufs1(chan)
-              val b2 = bufs2(chan)
-              val fft = ffts(chan)
-              extractChannel2(i1, arr = b1, x = x - kh, y = y - kh, w = kernelSize, h = kernelSize, chan = chan)
-              extractChannel2(i2, arr = b2, x = x - kh, y = y - kh, w = kernelSize, h = kernelSize, chan = chan)
-              fft.realForward(b1)
-              fft.realForward(b2)
-              mulC(b1, b2, scale = 1.0)
-              mulC(b1, bFlt, scale = 1.0)
-              fft.realInverse(b1, true)
-              val d = b1(0)(0)
-              bCh0(chan)(y)(x) = d + noise
-            // }
-          // }
+        val noise = math.random.linlin(0, 1, -config.noise, config.noise)
+        (0 until 3).foreach { chan =>
+          extractChannel2(i1, arr = b1, x = x - kh, y = y - kh, w = kernel, h = kernel, chan = chan)
+          extractChannel2(i2, arr = b2, x = x - kh, y = y - kh, w = kernel, h = kernel, chan = chan)
+          fft.realForward(b1)
+          fft.realForward(b2)
+          mulC(b1, b2, scale = 1.0)
+          bFltOpt.foreach { bFlt =>
+            mulC(b1, bFlt, scale = 1.0)
+          }
+          fft.realInverse(b1, true)
+          val d = b1(0)(0)
+          bCh0(chan)(y)(x) = d + noise
         }
-        // Await.result(Future.sequence(futures), Duration.Inf)
 
         val prog = ((x * h + y + 1) * progScale).toInt
         while (lastProg < prog) {
@@ -339,38 +259,51 @@ object Convolve extends App {
 
     val bCh = bCh0 // .map(_.clone())
 
-    val min = bCh.map(b1 => b1.map(_.min).min).min
-    val max = bCh.map(b1 => b1.map(_.max).max).max  // = max(max(red), max(green), max(blue))
-    println(s"max = $max")
+    val min0 = bCh.map(b1 => b1.map(_.min).min).min
+    val max0 = bCh.map(b1 => b1.map(_.max).max).max  // = max(max(red), max(green), max(blue))
+    val min  = min0 * (1 - agc) + prevGain.min * agc
+    val max  = max0 * (1 - agc) + prevGain.max * agc
+    // println(s"max = $max")
     // val gain = 1.0/max
     val mul  = 1.0/(max-min)
     val add  = -min
-
-    def levels(in: Double, /* lo: Double, hi: Double, */ gamma: Double): Double = {
-      val clip = in.clip(0, 1)
-      // val clip = in.clip(lo, hi).linlin(lo, hi, 0, 1)
-      val easy = clip.linlin(0, 1, math.Pi/2, 0).cos.squared // .linlin(0, 1, from, to)
-      easy.pow(gamma)
-    }
 
     bCh.foreach { b1 =>
       b1.foreach { row =>
         var i = 0
         while (i < row.length) {
           val a = (row(i) + add) * mul
-          row(i) = levels(a, /* lo = 0.25, hi = 0.75, */ gamma = 2)
+          row(i) = levels(a)
           i += 1
         }
       }
     }
 
-    bCh.zipWithIndex.foreach { case (b1, chan) =>
-      fillChannel(b1, i3 /* i1 */, chan = chan /* , add = add, mul = mul */)
+    bCh.zipWithIndex.foreach { case (bChan, chan) =>
+      fillChannel(bChan, i3 /* i1 */, chan = chan /* , add = add, mul = mul */)
     }
 
-    ImageIO.write(i3 /* i1 */, "png", pOut)
+    ImageIO.write(i3 /* i1 */, imgFormat, fOut)
+
+    Gain(min = min, max = max)
   }
 
-  perform3()
+  import config._
+  var _gain = Gain(0, 0)
+  for (frame <- startFrame to endFrame) {
+    def format(f: File, i: Int): File = {
+      val name = f.name.format(i)
+      f.parentOption.fold(file(name))(_/name)
+    }
+
+    println(s"${new java.util.Date()} : ----- frame $frame -----")
+    val fInA = format(inA, frame + frameOffA)
+    val fInB = format(inB, frame + frameOffB)
+    val fOut = format(out, frame)
+    if (!fOut.exists()) {
+      val agc = if (frame == startFrame) 0.0 else config.agcLag
+      _gain = renderFrame(fInA = fInA, fInB = fInB, fOut = fOut, agc = agc, prevGain = _gain)
+    }
+  }
   sys.exit()
 }
