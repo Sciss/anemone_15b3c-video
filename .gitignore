@@ -7,3 +7,5 @@ project/boot/
 dependency-graph.sbt
 wiki/
 conv_image_out/
+test_image_out/
+out.mp4
