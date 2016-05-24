@@ -1,2 +1,2 @@
 #!/bin/sh
-sbt "run resample -s 0 -e 1499 -l 0.9 --offset-a 1 --offset-b 0 --filter filters/hp6.aif --kernel 32 --window 2 --rotate --shift-y 56 --gamma 0.5 /home/hhrutz/Documents/projects/Anemone/burned/video/frame-%d.png  ../Rays/image_out/frame-%d.png conv_image_out/frame-%d.png"
+sbt "run resample -s 0 -e 1499 -n 0.04 -f 4 conv_image_out/frame-%d.png rsmp_image_out/frame-%d.png"
