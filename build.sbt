@@ -15,6 +15,7 @@ lazy val kollFlitzVersion   = "0.2.0"
 lazy val swingPlusVersion   = "0.2.1"
 lazy val fileUtilVersion    = "1.1.1"
 lazy val audioFileVersion   = "1.4.5"
+lazy val processorVersion   = "0.4.0"
 
 libraryDependencies ++= Seq(
   "org.processing"   %  "video"           % processingVersion,   // exclude("net.java.dev.jna", "jna") - doesn't work
@@ -24,7 +25,8 @@ libraryDependencies ++= Seq(
   "de.sciss"         %% "kollflitz"       % kollFlitzVersion,
   "de.sciss"         %% "swingplus"       % swingPlusVersion,
   "de.sciss"         %% "fileutil"        % fileUtilVersion,
-  "de.sciss"         %% "scalaaudiofile"  % audioFileVersion
+  "de.sciss"         %% "scalaaudiofile"  % audioFileVersion,
+  "de.sciss"         %% "processor"       % processorVersion
 )
 
 dependencyOverrides += "net.java.dev.jna" % "jna" % jnaVersion
