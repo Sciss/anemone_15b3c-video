@@ -1,1 +1,1 @@
-mainClass in (Compile, run) := Some("de.sciss.anemone.Convolve")
+mainClass in (Compile, run) := Some("de.sciss.anemone.Main")

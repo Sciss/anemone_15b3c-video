@@ -13,10 +13,11 @@
 
 package de.sciss.anemone
 
+import java.awt.Color
 import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 
-import de.sciss.dsp
+import de.sciss.{dsp, numbers}
 import de.sciss.file._
 import de.sciss.processor.Processor
 import de.sciss.processor.impl.ProcessorImpl
@@ -25,8 +26,8 @@ import scala.concurrent.{ExecutionContext, blocking}
 
 object Resample {
   case class Config(in: File = file("in"), out: File = file("out"),
-                    startFrame: Int = 0, endFrame: Int = 0,
-                    noise: Double = 1.0,
+                    startFrame: Int = 0, endFrame: Int = 0, factor: Int = 2,
+                    noise: Double = 0.1,
                     resampleWindow: Int = 29, dropFrame: Int = 16, dropRate: Double = 0.0)
 
   def main(args: Array[String]): Unit = {
@@ -51,8 +52,13 @@ object Resample {
         .action   { (v, c) => c.copy(endFrame = v) }
         .validate {  v     => if (v >= 0) success else failure("end-frame must be >= 0") }
 
+      opt[Int] ('f', "factor")
+        .text ("Resample factor (integer). Default: 2")
+        .action   { (v, c) => c.copy(factor = v) }
+        .validate {  v     => if (v >= 2) success else failure("factor must be >= 2") }
+
       opt[Double] ('n', "noise")
-        .text ("Noise amplitude. Default: 1.0)")
+        .text ("Noise amplitude. Default: 0.1)")
         .action   { (v, c) => c.copy(noise = v) }
     }
     p.parse(args, Config()).fold(sys.exit(1)) { config =>
@@ -75,17 +81,53 @@ object Resample {
     }
   }
 
+  private def extractChannel(in: BufferedImage, w: Int, h: Int, chan: Int): Array[Array[Float]] = {
+    val shift = chan * 8
+    val iw = in.getWidth
+    val ih = in.getHeight
+    Array.tabulate(h) { y =>
+      Array.tabulate(w) { x =>
+        val i = if (x < iw && y < ih) (in.getRGB(x, y) >>> shift) & 0xFF else 0
+        i.toFloat / 0xFF
+      }
+    }
+  }
+
+  def fillChannel(in: Array[Array[Float]], out: BufferedImage, chan: Int, add: Double = 0.0, mul: Double = 1.0): Unit = {
+    val shift = chan * 8
+    val mask  = ~(0xFF << shift)
+    for (y <- in.indices) {
+      val v = in(y)
+      for (x <- v.indices) {
+        val d = (v(x) + add) * mul
+        import numbers.Implicits._
+        val i = (d.clip(0, 1) * 0xFF + 0.5).toInt << shift
+        val j = out.getRGB(x, y)
+        val k = j & mask | i
+        out.setRGB(x, y, k)
+      }
+    }
+  }
+
   private def mkFIn(config: Config, frame: Int): File = {
     import config.in
     val name = in.name.format(frame)
     in.parentOption.fold(file(name))(_/name)
   }
 
-  private def readFrame(config: Config, frame: Int): BufferedImage = {
-    val fIn1      = mkFIn(config, frame)
-    val imgIn     = ImageIO.read(fIn1)
-    val imgCrop   = imgIn // cropImage2(config, imgIn)
-    imgCrop
+  /** @param width    image width in pixels
+    * @param height   image height in pixels
+    * @param data     image data, as [chan][y][x]
+    */
+  private final class Frame(val width: Int, val height: Int, val data: Array[Array[Array[Float]]])
+
+  private def readFrame(config: Config, frame: Int): Frame = {
+    val fIn1  = mkFIn(config, frame)
+    val img   = ImageIO.read(fIn1)
+    val w     = img.getWidth
+    val h     = img.getHeight
+    val data  = Array.tabulate(3)(chan => extractChannel(img, w = w, h = h, chan = chan))
+    new Frame(width = w, height = h, data = data)
   }
 
   private final class RenderImageSequence(config: Config)
@@ -93,6 +135,8 @@ object Resample {
 
     protected def body(): Unit = blocking {
       import config._
+
+      val fmtOut = out.ext.toLowerCase
 
       val frameInMul    = if (endFrame >= startFrame) 1 else -1
       val frameSeq0     = startFrame to endFrame by frameInMul
@@ -107,7 +151,6 @@ object Resample {
       val numInFrames   = frameSeq.size // math.abs(lastFrame - firstFrame + 1)
       // val frameOff      = firstFrame // if (lastFrame >= firstFrame) firstFrame else lastFrame
       val numOutFrames  = numInFrames * 2
-      // val imgOut        = new BufferedImage(sizeOut, sizeOut, BufferedImage.TYPE_BYTE_BINARY)
 
       def mkFOut(frame: Int): File = {
         val name = out.name.format(frame)
@@ -118,8 +161,15 @@ object Resample {
       val winH = resampleWindow / 2
 
       var frame0      = readFrame(config, frameSeq(0) /* frameOff */)
-      val widthIn     = frame0.getWidth
-      val heightIn    = frame0.getHeight
+      val widthIn     = frame0.width
+      val heightIn    = frame0.height
+      val imgOut      = new BufferedImage(widthIn, heightIn, BufferedImage.TYPE_INT_ARGB)
+      // because we never override the alpha channel,
+      // we must make sure it's opaque first:
+      val gTmp = imgOut.createGraphics()
+      gTmp.setColor(Color.black)
+      gTmp.fillRect(0, 0, widthIn, heightIn)
+      gTmp.dispose()
 
       // assert (widthIn == sizeIn && heightIn == sizeIn)
 
@@ -131,30 +181,39 @@ object Resample {
       frame0 = null // let it be GC'ed
 
       val resample      = dsp.Resample(dsp.Resample.Quality.Medium /* Low */)
-      val imgResample   = Array.fill(2)(new BufferedImage(widthIn, heightIn, BufferedImage.TYPE_BYTE_GRAY))
+      val imgResample   = Array.fill(factor) {
+        val data = Array.ofDim[Float](3, heightIn, widthIn)
+        new Frame(width = widthIn, height = heightIn, data = data)
+      }
       val bufResampleIn = new Array[Float](resampleWindow)
-      val bufResampleOut= new Array[Float](2)
+      val bufResampleOut= new Array[Float](factor)
 
       def performResample(): Unit = {
         var y = 0
         while (y < heightIn) {
           var x = 0
           while (x < widthIn) {
-            var t = 0
-            while (t < resampleWindow) {
-              val rgbIn = frameWindow(t).getRGB(x, y)
-              val vIn = (((rgbIn & 0xFF0000) >> 16) + ((rgbIn & 0x00FF00) >> 8) + (rgbIn & 0x0000FF)) / 765f // it's gray anyway
-              bufResampleIn(t) = vIn
-              t += 1
-            }
-            resample.process(src = bufResampleIn, srcOff = winH, dest = bufResampleOut, destOff = 0, length = 2, factor = 2)
-            var off = 0
-            while (off < 2) {
-              // note: gain factor 2 here!
-              val vOut    = (math.max(0f, math.min(1f, bufResampleOut(off) * 2)) * 255 + 0.5f).toInt
-              val rgbOut  = 0xFF000000 | (vOut << 16) | (vOut << 8) | vOut
-              imgResample(off).setRGB(x, y, rgbOut)
-              off += 1
+            var chan = 0
+            while (chan < 3) {
+              var t = 0
+              while (t < resampleWindow) {
+                val vIn = frameWindow(t).data(chan)(y)(x) // .getRGB(x, y)
+                bufResampleIn(t) = vIn
+                t += 1
+              }
+              resample.process(src = bufResampleIn, srcOff = winH, dest = bufResampleOut, destOff = 0,
+                length = factor, factor = factor)
+              var off = 0
+              while (off < factor) {
+                // note: gain factor 2 here!
+                // val vOut    = (math.max(0f, math.min(1f, bufResampleOut(off) * factor)) * 255 + 0.5f).toInt
+                import numbers.Implicits._
+                val noise   = math.random.linlin(0, 1, -config.noise, config.noise).toFloat
+                val vOut    = math.max(0f, math.min(1f, bufResampleOut(off) * factor + noise))
+                imgResample(off).data(chan)(y)(x) = vOut // setRGB(x, y, rgbOut)
+                off += 1
+              }
+              chan += 1
             }
             x += 1
           }
@@ -165,19 +224,25 @@ object Resample {
       var frameIn  = resampleWindow - winH
       var frameOut = 0
       while (frameOut < numOutFrames) {
-        val fOut1 = mkFOut(frameOut + 1)
-        val fOut2 = mkFOut(frameOut + 2)
+        // val fOut1 = mkFOut(frameOut /* + 1 */)
+        // val fOut2 = mkFOut(frameOut + 2)
 
-        if (!fOut1.exists() || !fOut2.exists()) {
+        val fOutS = (frameOut until (frameOut + factor)).map(mkFOut)
+
+        if (fOutS.exists(!_.exists())) {
           performResample()
           var off = 0
-          while (off < 2) {
-            val imgCrop   = imgResample(off)
-            val imgUp     = imgCrop // mkResize(config, imgCrop)
-            val imgNoise  = imgUp // mkNoise(config, imgUp)
-            // mkThresh(config, imgNoise, imgOut)
-            ImageIO.write(imgNoise /* imgOut */, "png", if (off == 0) fOut1 else fOut2)
+          while (off < factor) {
+            val res  = imgResample(off)
+            val fOut = fOutS(off)
+            var chan = 0
+            while (chan < 3) {
+              fillChannel(in = res.data(chan), out = imgOut, chan = chan, add = 0.0, mul = 1.0)
+              chan += 1
+            }
+            ImageIO.write(imgOut, fmtOut, fOut)
             off += 1
+            frameOut += 1
           }
         }
 
@@ -188,7 +253,6 @@ object Resample {
         }
 
         frameIn  += 1
-        frameOut += 2
         progress = frameIn.toDouble / numInFrames
         checkAborted()
       }
