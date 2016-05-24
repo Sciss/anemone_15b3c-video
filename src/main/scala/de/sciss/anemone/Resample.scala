@@ -207,9 +207,7 @@ object Resample {
               while (off < factor) {
                 // note: gain factor 2 here!
                 // val vOut    = (math.max(0f, math.min(1f, bufResampleOut(off) * factor)) * 255 + 0.5f).toInt
-                import numbers.Implicits._
-                val noise   = math.random.linlin(0, 1, -config.noise, config.noise).toFloat
-                val vOut    = math.max(0f, math.min(1f, bufResampleOut(off) * factor + noise))
+                val vOut    = math.max(0f, math.min(1f, bufResampleOut(off) * factor))
                 imgResample(off).data(chan)(y)(x) = vOut // setRGB(x, y, rgbOut)
                 off += 1
               }
@@ -235,6 +233,25 @@ object Resample {
           while (off < factor) {
             val res  = imgResample(off)
             val fOut = fOutS(off)
+
+            if (noise > 0.0) {
+              var x = 0
+              while (x < widthIn) {
+                var y = 0
+                while (y < heightIn) {
+                  import numbers.Implicits._
+                  val noise = math.random.linlin(0, 1, -config.noise, config.noise).toFloat
+                  var chan = 0
+                  while (chan < 3) {
+                    res.data(chan)(y)(x) += noise
+                    chan += 1
+                  }
+                  y += 1
+                }
+                x += 1
+              }
+            }
+
             var chan = 0
             while (chan < 3) {
               fillChannel(in = res.data(chan), out = imgOut, chan = chan, add = 0.0, mul = 1.0)
