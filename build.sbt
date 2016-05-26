@@ -29,6 +29,10 @@ libraryDependencies ++= Seq(
   "de.sciss"         %% "processor"       % processorVersion
 )
 
+javaCppPresetLibs ++= Seq(
+  "ffmpeg" -> "2.8.1"
+)
+
 dependencyOverrides += "net.java.dev.jna" % "jna" % jnaVersion
 
 scalacOptions ++= Seq("-deprecation", "-unchecked", "-feature", "-encoding", "utf8", "-Xfuture")

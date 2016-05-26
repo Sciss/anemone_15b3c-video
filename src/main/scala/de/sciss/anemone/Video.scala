@@ -18,10 +18,12 @@ import java.awt.{Dimension, EventQueue}
 import java.text.SimpleDateFormat
 import javax.swing.WindowConstants
 
+import de.sciss.file._
 import de.sciss.fscape.spect.Wavelet
 import de.sciss.kollflitz.impl.Urn
 import de.sciss.numbers
-import processing.core.{PApplet, PConstants, PImage}
+import org.bytedeco.javacv.{FFmpegFrameGrabber, Java2DFrameConverter}
+import processing.core.{PApplet, PConstants, PGraphicsJava2D, PImage}
 import processing.video.Capture
 import processing.{event => pe}
 
@@ -121,8 +123,10 @@ final class Video(config: Video.Config) extends PApplet {
 
   // private[this] val SCAN  = VIDEO_WIDTH - WINDOW_WIDTH
 
-  private[this] var _camImage: PImage = _
-  private[this] var cam: Capture = _
+  private[this] var _camImage : PImage = _
+  private[this] var cam       : Capture = _
+  private[this] var grabRay   : FFmpegFrameGrabber= _
+  private[this] var grabBleed : FFmpegFrameGrabber= _
 
   def camImage: PImage = _camImage
 
@@ -146,11 +150,32 @@ final class Video(config: Video.Config) extends PApplet {
     case 16 => Wavelet.COEFFS_DAUB16
   })
   
-  private sealed trait RenderMode { def usesCam: Boolean }
-  private case object RenderAdjust extends RenderMode { val usesCam = true  }
-  private case object RenderCam    extends RenderMode { val usesCam = true  }
-  private case object RenderBleed  extends RenderMode { val usesCam = false }
-  private case object RenderRay    extends RenderMode { val usesCam = false }
+  private sealed trait RenderMode {
+    def usesCam: Boolean
+    def start(): Unit
+    def stop(): Unit
+  }
+  private case object RenderAdjust extends RenderMode {
+    val usesCam = true
+
+    def start() = ()
+    def stop () = ()
+  }
+  private case object RenderCam extends RenderMode {
+    val usesCam = true
+    def start() = ()
+    def stop () = ()
+  }
+  private case object RenderBleed extends RenderMode {
+    val usesCam = false
+    def start(): Unit = grabBleed.start()
+    def stop (): Unit = grabBleed.stop()
+  }
+  private case object RenderRay extends RenderMode {
+    val usesCam = false
+    def start(): Unit = grabRay.start()
+    def stop (): Unit = grabRay.stop()
+  }
 
   private[this] var renderMode      = RenderBleed /* RenderCam */: RenderMode
 
@@ -200,10 +225,12 @@ final class Video(config: Video.Config) extends PApplet {
     if (hasCursor) cursor() else noCursor()
     if (old != m) {
       println(s"Mode: $m")
+      old.stop()
       val stopCam   =  old.usesCam && !m.usesCam
       val startCam  = !old.usesCam &&  m.usesCam
       if (stopCam  && cam != null) cam.stop ()
       if (startCam && cam != null) cam.start()
+      m.start()
     }
   }
 
@@ -215,6 +242,8 @@ final class Video(config: Video.Config) extends PApplet {
     }
   }
 
+  private[this] val java2dFrameConv = new Java2DFrameConverter
+
   override def setup(): Unit = {
     size(WINDOW_WIDTH, WINDOW_HEIGHT)
     if (VIDEO_DEVICE == Video.DEVICE_NONE) {
@@ -225,6 +254,11 @@ final class Video(config: Video.Config) extends PApplet {
       _camImage = cam
       // cam.start()
     }
+    val fVideoRay   = userHome / "Documents" / "projects" / "Langzeitbelichtung" / "material" / "convolve.mp4"
+    grabRay         = new FFmpegFrameGrabber(fVideoRay.path)
+    val fVideoBleed = userHome / "Documents" / "projects" / "Anemone" / "minuten" / "out3.mp4"
+    grabBleed       = new FFmpegFrameGrabber(fVideoBleed.path)
+
     // noLoop()
     imgOut.loadPixels()
     setRenderMode(RenderCam)
@@ -508,20 +542,23 @@ final class Video(config: Video.Config) extends PApplet {
   private def red  (): Unit = stroke(0xFF, 0x00, 0x00)
   private def green(): Unit = stroke(0x00, 0xC0, 0x00)
 
-  private def drawBleed(): Unit = {
-    val w = getWidth
-    val h = getHeight
-    fill(255f, 0f, 0f)
-    noStroke()
-    rect(0, 0, w, h)
-  }
+  private def drawRay  (): Unit = drawFFmpeg(grabRay  )
+  private def drawBleed(): Unit = drawFFmpeg(grabBleed)
 
-  private def drawRay(): Unit = {
-    val w = getWidth
-    val h = getHeight
-    fill(0f, 0f, 255f)
-    noStroke()
-    rect(0, 0, w, h)
+  private def drawFFmpeg(grab: FFmpegFrameGrabber): Unit = {
+    val frame = grab.grab()
+    val img   = java2dFrameConv.getBufferedImage(frame, 1.0)
+    // val imgP  = new PImage(img)
+    val w     = getWidth
+    val h     = getHeight
+    val wi    = img.getWidth()
+    val hi    = img.getHeight()
+    val x = (w - wi ) >> 1
+    val y = (h - hi ) >> 1
+
+    val g2 = this.g.asInstanceOf[PGraphicsJava2D].g2
+    g2.drawImage(img, x, y, this)
+    // image(imgP /* imgOut */, x, y)
   }
 
   private def drawCam(): Unit = {
