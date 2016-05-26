@@ -150,7 +150,7 @@ object Resample {
 
       val numInFrames   = frameSeq.size // math.abs(lastFrame - firstFrame + 1)
       // val frameOff      = firstFrame // if (lastFrame >= firstFrame) firstFrame else lastFrame
-      val numOutFrames  = numInFrames * 2
+      val numOutFrames  = numInFrames * factor
 
       def mkFOut(frame: Int): File = {
         val name = out.name.format(frame)
