@@ -39,7 +39,8 @@ object Video {
                     x2: Int = -1, y2: Int = -1, w2: Int = -1, h2: Int = -1,
                     fadeDur: Double = 60, noise: Double = 0.1, wavelet: Int = 8,
                     intervalDur: Double = 3 * 60 + 10, totalDur: Double = 15 * 60 + 10,
-                    seed: Long = 0L /* -1L */, logging: Boolean = false, fast: Boolean = false)
+                    seed: Long = 0L /* -1L */, logging: Boolean = false, fast: Boolean = false,
+                    video1: File = null, video2: File = null)
 
   def main(args: Array[String]) = {
     val parser = new scopt.OptionParser[Config]("anemone_15b3c-video") {
@@ -70,6 +71,8 @@ object Video {
       opt[Long  ]("seed") text "RNG seed for algorithm selection (-1 = auto)" action { case (v, c) => c.copy(seed = v) }
       opt[Unit  ]('v', "log"  ) text "enable debug logging" action { case (_, c) => c.copy(logging = true) }
       opt[Unit  ]('f', "fast" ) text "enable fast refresh" action { case (_, c) => c.copy(fast = true) }
+      opt[File]("video1") text "video 1 file " action { case (v, c) => c.copy(video1 = v) }
+      opt[File]("video2") text "video 2 file " action { case (v, c) => c.copy(video2 = v) }
     }
     parser.parse(args, Config()).fold(sys.exit(1)) { config =>
       if (config.listDevices) {
@@ -125,8 +128,8 @@ final class Video(config: Video.Config) extends PApplet {
 
   private[this] var _camImage : PImage = _
   private[this] var cam       : Capture = _
-  private[this] var grabRay   : FFmpegFrameGrabber= _
-  private[this] var grabBleed : FFmpegFrameGrabber= _
+  private[this] var grab1     : FFmpegFrameGrabber= _
+  private[this] var grab2     : FFmpegFrameGrabber= _
 
   def camImage: PImage = _camImage
 
@@ -166,18 +169,18 @@ final class Video(config: Video.Config) extends PApplet {
     def start() = ()
     def stop () = ()
   }
-  private case object RenderBleed extends RenderMode {
+  private case object RenderPlay2 extends RenderMode {
     val usesCam = false
-    def start(): Unit = grabBleed.start()
-    def stop (): Unit = grabBleed.stop()
+    def start(): Unit = grab2.start()
+    def stop (): Unit = grab2.stop()
   }
-  private case object RenderRay extends RenderMode {
+  private case object RenderPlay1 extends RenderMode {
     val usesCam = false
-    def start(): Unit = grabRay.start()
-    def stop (): Unit = grabRay.stop()
+    def start(): Unit = grab1.start()
+    def stop (): Unit = grab1.stop()
   }
 
-  private[this] var renderMode      = RenderBleed /* RenderCam */: RenderMode
+  private[this] var renderMode      = RenderPlay2 /* RenderCam */: RenderMode // init must be different from `RenderCam`
 
   private[this] var adjustCorner    = 0
 
@@ -254,10 +257,10 @@ final class Video(config: Video.Config) extends PApplet {
       _camImage = cam
       // cam.start()
     }
-    val fVideoRay   = userHome / "Documents" / "projects" / "Langzeitbelichtung" / "material" / "convolve.mp4"
-    grabRay         = new FFmpegFrameGrabber(fVideoRay.path)
-    val fVideoBleed = userHome / "Documents" / "projects" / "Anemone" / "minuten" / "out3.mp4"
-    grabBleed       = new FFmpegFrameGrabber(fVideoBleed.path)
+    // val fVideoRay   = userHome / "Documents" / "projects" / "Langzeitbelichtung" / "material" / "convolve.mp4"
+    if (config.video1 != null) grab1 = new FFmpegFrameGrabber(config.video1.path)
+    // val fVideoBleed = userHome / "Documents" / "projects" / "Anemone" / "minuten" / "out3.mp4"
+    if (config.video2 != null) grab2 = new FFmpegFrameGrabber(config.video2.path)
 
     // noLoop()
     imgOut.loadPixels()
@@ -527,10 +530,10 @@ final class Video(config: Video.Config) extends PApplet {
     rect(0, 0, w, h)
     
     renderMode match {
-      case RenderBleed =>
-        drawBleed()
-      case RenderRay =>
-        drawRay()
+      case RenderPlay2 =>
+        drawPlay2()
+      case RenderPlay1 =>
+        drawPlay1()
       case RenderCam =>
         renderCamFrame()
         drawCam()
@@ -542,11 +545,20 @@ final class Video(config: Video.Config) extends PApplet {
   private def red  (): Unit = stroke(0xFF, 0x00, 0x00)
   private def green(): Unit = stroke(0x00, 0xC0, 0x00)
 
-  private def drawRay  (): Unit = drawFFmpeg(grabRay  )
-  private def drawBleed(): Unit = drawFFmpeg(grabBleed)
+  private def drawPlay1(): Unit = drawFFmpeg(grab1)
+  private def drawPlay2(): Unit = drawFFmpeg(grab2)
 
-  private def drawFFmpeg(grab: FFmpegFrameGrabber): Unit = {
-    val frame = grab.grab()
+  private def drawFFmpeg(grab: FFmpegFrameGrabber): Unit = if (grab != null) {
+    val frame0 = grab.grab()
+    val frame  = if (frame0 != null) frame0 else {
+      grab.restart()
+      val res = grab.grab()
+      if (res == null) {
+        println("Loop doesn't work??")
+        return
+      }
+      res
+    }
     val img   = java2dFrameConv.getBufferedImage(frame, 1.0)
     // val imgP  = new PImage(img)
     val w     = getWidth
@@ -599,15 +611,15 @@ final class Video(config: Video.Config) extends PApplet {
     renderMode match {
       case RenderAdjust => keyPressedAdjust(e)
       case RenderCam    => keyPressedCam   (e)
-      case RenderRay    => keyPressedRay   (e)
-      case RenderBleed  => keyPressedBleed (e)
+      case RenderPlay1  => keyPressedPlay1 (e)
+      case RenderPlay2  => keyPressedPlay2 (e)
     }
   }
 
-  private def keyPressedRay(e: pe.KeyEvent): Unit = {
+  private def keyPressedPlay1(e: pe.KeyEvent): Unit = {
     handleStdKeys(e)
     e.getKeyCode match {
-      case KeyEvent.VK_ENTER => setRenderMode(RenderBleed)
+      case KeyEvent.VK_ENTER => setRenderMode(RenderPlay2)
       case KeyEvent.VK_LEFT  =>
         setRenderMode(RenderCam)
         startEvent()
@@ -615,12 +627,12 @@ final class Video(config: Video.Config) extends PApplet {
     }
   }
 
-  private def keyPressedBleed(e: pe.KeyEvent): Unit = {
+  private def keyPressedPlay2(e: pe.KeyEvent): Unit = {
     handleStdKeys(e)
     e.getKeyCode match {
       case KeyEvent.VK_ENTER => // (End)
       case KeyEvent.VK_LEFT  =>
-        setRenderMode(RenderRay)
+        setRenderMode(RenderPlay1)
       case _ =>
     }
   }
@@ -717,7 +729,7 @@ final class Video(config: Video.Config) extends PApplet {
           startEvent()
         } else {
           stopEvent()
-          setRenderMode(RenderRay)
+          setRenderMode(RenderPlay1)
         }
 
       case KeyEvent.VK_RIGHT =>
