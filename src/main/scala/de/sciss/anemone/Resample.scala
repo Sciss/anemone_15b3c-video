@@ -259,7 +259,6 @@ object Resample {
             }
             ImageIO.write(imgOut, fmtOut, fOut)
             off += 1
-            frameOut += 1
           }
         }
 
@@ -270,6 +269,7 @@ object Resample {
         }
 
         frameIn  += 1
+        frameOut += factor
         progress = frameIn.toDouble / numInFrames
         checkAborted()
       }
