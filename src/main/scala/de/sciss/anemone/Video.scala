@@ -145,8 +145,14 @@ final class Video(config: Video.Config) extends PApplet {
     case  8 => Wavelet.COEFFS_DAUB8
     case 16 => Wavelet.COEFFS_DAUB16
   })
+  
+  private sealed trait RenderMode { def usesCam: Boolean }
+  private case object RenderAdjust extends RenderMode { val usesCam = true  }
+  private case object RenderCam    extends RenderMode { val usesCam = true  }
+  private case object RenderBleed  extends RenderMode { val usesCam = false }
+  private case object RenderRay    extends RenderMode { val usesCam = false }
 
-  private[this] var renderMode      = true
+  private[this] var renderMode      = RenderBleed /* RenderCam */: RenderMode
 
   private[this] var adjustCorner    = 0
 
@@ -183,13 +189,22 @@ final class Video(config: Video.Config) extends PApplet {
     super.init()
     updateNoise()
     setPreferredSize(new Dimension(WINDOW_WIDTH, WINDOW_HEIGHT))
-    setRenderMode(true)
+    // setRenderMode(RenderCam)
     clipFrames()
   }
 
-  private def setRenderMode(b: Boolean): Unit = {
-    renderMode = b
-    if (renderMode && cam != null) noCursor() else cursor()
+  private def setRenderMode(m: RenderMode): Unit = {
+    val old = renderMode
+    renderMode = m
+    val hasCursor = renderMode == RenderAdjust || (renderMode == RenderCam && cam == null)
+    if (hasCursor) cursor() else noCursor()
+    if (old != m) {
+      println(s"Mode: $m")
+      val stopCam   =  old.usesCam && !m.usesCam
+      val startCam  = !old.usesCam &&  m.usesCam
+      if (stopCam  && cam != null) cam.stop ()
+      if (startCam && cam != null) cam.start()
+    }
   }
 
   private def updateNoise(): Unit = {
@@ -208,15 +223,16 @@ final class Video(config: Video.Config) extends PApplet {
     } else {
       cam = new Capture(this, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_DEVICE, VIDEO_FPS)
       _camImage = cam
-      cam.start()
+      // cam.start()
     }
     // noLoop()
     imgOut.loadPixels()
+    setRenderMode(RenderCam)
   }
 
   private[this] var bufShift = 0
 
-  private[this] def crop(x: Int, y: Int, w: Int, h: Int, buf: Array[Float]): Unit = {
+  private def crop(x: Int, y: Int, w: Int, h: Int, buf: Array[Float]): Unit = {
     imgOut.copy(_camImage, x, y, w, h, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
     imgOut.loadPixels()
     val pixIn = imgOut.pixels
@@ -270,9 +286,9 @@ final class Video(config: Video.Config) extends PApplet {
     new Urn[Int](0 until NUM_ALGORITHMS, infinite = true)(
       new util.Random(if (config.seed == -1L) System.currentTimeMillis() else config.seed))
 
-  private[this] def log(what: => String): Unit = if (config.logging) println(what)
+  private def log(what: => String): Unit = if (config.logging) println(what)
 
-  private[this] def checkNextEvent(): Unit =
+  private def checkNextEvent(): Unit =
     if (!isFading && ALGORITHM != _fadingAlgorithm) {
       _previousAlgorithm = _fadingAlgorithm
       _fadingAlgorithm   = ALGORITHM
@@ -280,13 +296,13 @@ final class Video(config: Video.Config) extends PApplet {
       log(s"Next fade from ${_previousAlgorithm} to ${_fadingAlgorithm}")
     }
 
-  private[this] def setAlgorithm(id: Int): Unit = {
+  private def setAlgorithm(id: Int): Unit = {
     ALGORITHM = id
     log(s"setAlgorithm($id)")
     checkNextEvent()
   }
 
-  private[this] def runAlgorithm(id: Int, start: Int, stop: Int): Unit = {
+  private def runAlgorithm(id: Int, start: Int, stop: Int): Unit = {
     var i = start
     (id: @switch) match {
       case 0 =>
@@ -339,7 +355,7 @@ final class Video(config: Video.Config) extends PApplet {
     }
   }
 
-  private[this] def startEvent(): Unit = {
+  private def startEvent(): Unit = {
     val now   = System.currentTimeMillis()
     stopTime  = now + (config.totalDur * 1000).toLong
     nextEvent = now
@@ -349,9 +365,9 @@ final class Video(config: Video.Config) extends PApplet {
 
   private[this] val timeFormat = new SimpleDateFormat("hh:mm:ss.SSS")
 
-  private[this] def formatTime(n: Long): String = timeFormat.format(new java.util.Date(n))
+  private def formatTime(n: Long): String = timeFormat.format(new java.util.Date(n))
 
-  private[this] def mkNextEvent(): Unit = {
+  private def mkNextEvent(): Unit = {
     // val now   = System.currentTimeMillis()
     nextEvent = nextEvent + (config.intervalDur * 1000).toLong
     log(s"mkNextEvent - ${formatTime(nextEvent)}")
@@ -359,24 +375,27 @@ final class Video(config: Video.Config) extends PApplet {
     setAlgorithm(algorithmUrn.next())
   }
 
-  private[this] def stopEvent(): Unit = {
+  private def stopEvent(): Unit = {
     log("stopEvent")
     nextEvent = Long.MaxValue
   }
+
+  private def isStopped: Boolean =
+    nextEvent == Long.MaxValue
 
   private[this] var _currentRun: Double = _BUF_SIZE // 1.0
 
   def currentRun: Double = _currentRun
   def currentRun_=(value: Double): Unit = _currentRun = value
 
-  private[this] def isFading: Boolean = _currentRun < _BUF_SIZE
+  private def isFading: Boolean = _currentRun < _BUF_SIZE
 
   private[this] var ADVANCE = true
 
   def advance: Boolean = ADVANCE
   def advance_=(value: Boolean): Unit = ADVANCE = value
 
-  private[this] def renderFrame(): Unit = {
+  private def renderCamFrame(): Unit = {
     crop(x = X1, y = Y1, w = W1, h = H1, buf = buf1)
     crop(x = X2, y = Y2, w = W2, h = H2, buf = buf2)
 
@@ -465,26 +484,47 @@ final class Video(config: Video.Config) extends PApplet {
   }
 
   override def draw(): Unit = {
-    if (config.fast && cam.available()) cam.read()
+    if (renderMode.usesCam && config.fast && cam.available()) cam.read()
 
     val w = getWidth
     val h = getHeight
     fill(0f)
     noStroke()
     rect(0, 0, w, h)
-
-    if (renderMode) {
-      renderFrame()
-      drawRender()
-    } else {
-      drawAdjustment()
+    
+    renderMode match {
+      case RenderBleed =>
+        drawBleed()
+      case RenderRay =>
+        drawRay()
+      case RenderCam =>
+        renderCamFrame()
+        drawCam()
+      case RenderAdjust => 
+        drawAdjustment()
     }
   }
 
-  private[this] def red  (): Unit = stroke(0xFF, 0x00, 0x00)
-  private[this] def green(): Unit = stroke(0x00, 0xC0, 0x00)
+  private def red  (): Unit = stroke(0xFF, 0x00, 0x00)
+  private def green(): Unit = stroke(0x00, 0xC0, 0x00)
 
-  private[this] def drawRender(): Unit = {
+  private def drawBleed(): Unit = {
+    val w = getWidth
+    val h = getHeight
+    fill(255f, 0f, 0f)
+    noStroke()
+    rect(0, 0, w, h)
+  }
+
+  private def drawRay(): Unit = {
+    val w = getWidth
+    val h = getHeight
+    fill(0f, 0f, 255f)
+    noStroke()
+    rect(0, 0, w, h)
+  }
+
+  private def drawCam(): Unit = {
     val w = getWidth
     val h = getHeight
     val x = (w - WINDOW_WIDTH ) >> 1
@@ -492,7 +532,7 @@ final class Video(config: Video.Config) extends PApplet {
     image(imgOut, x, y)
   }
 
-  private[this] def drawAdjustment(): Unit = {
+  private def drawAdjustment(): Unit = {
     val w = getWidth
     val h = getHeight
     val x = (w - VIDEO_FIT_W) / 2
@@ -519,15 +559,41 @@ final class Video(config: Video.Config) extends PApplet {
 
   override def keyPressed(e: pe.KeyEvent): Unit = {
     if (key == PConstants.ESC) key = 0    // avoid default behaviour of quitting the system
-    if (renderMode) keyPressedRender(e) else keyPressedAdjust(e)
+    renderMode match {
+      case RenderAdjust => keyPressedAdjust(e)
+      case RenderCam    => keyPressedCam   (e)
+      case RenderRay    => keyPressedRay   (e)
+      case RenderBleed  => keyPressedBleed (e)
+    }
   }
 
-  private[this] def keyPressedAdjust(e: pe.KeyEvent): Unit = {
+  private def keyPressedRay(e: pe.KeyEvent): Unit = {
+    handleStdKeys(e)
+    e.getKeyCode match {
+      case KeyEvent.VK_ENTER => setRenderMode(RenderBleed)
+      case KeyEvent.VK_LEFT  =>
+        setRenderMode(RenderCam)
+        startEvent()
+      case _ =>
+    }
+  }
+
+  private def keyPressedBleed(e: pe.KeyEvent): Unit = {
+    handleStdKeys(e)
+    e.getKeyCode match {
+      case KeyEvent.VK_ENTER => // (End)
+      case KeyEvent.VK_LEFT  =>
+        setRenderMode(RenderRay)
+      case _ =>
+    }
+  }
+
+  private def keyPressedAdjust(e: pe.KeyEvent): Unit = {
     val amt = if (e.isShiftDown) 4 else 1
     e.getKeyCode match {
       case KeyEvent.VK_A => // exit adjustment mode
         println(s"--x1 $X1 --y1 $Y1 --w1 $W1 --h1 $H1 --x2 $X2 --y2 $Y2 --w2 $W2 --h2 $H2")
-        setRenderMode(true)
+        setRenderMode(RenderCam)
 
       case KeyEvent.VK_SPACE => adjustCorner = (adjustCorner + 1) % 4
       case KeyEvent.VK_LEFT  =>
@@ -566,8 +632,17 @@ final class Video(config: Video.Config) extends PApplet {
     }
     clipFrames()
   }
-    
-  private[this] def keyPressedRender(e: pe.KeyEvent): Unit =
+
+  private def resetMode(): Unit = {
+    _previousAlgorithm  = NUM_ALGORITHMS
+    _fadingAlgorithm    = NUM_ALGORITHMS
+    ALGORITHM           = NUM_ALGORITHMS
+    _currentRun         = _BUF_SIZE
+    nextEvent           = Long.MaxValue
+    setRenderMode(RenderCam)
+  }
+
+  private def handleStdKeys(e: pe.KeyEvent): Unit =
     if (e.isControlDown) {
       if (e.getKeyCode == KeyEvent.VK_F && e.isShiftDown) { // toggle full-screen
         if (frame != null) {
@@ -575,51 +650,67 @@ final class Video(config: Video.Config) extends PApplet {
           val sd = gc.getDevice
           sd.setFullScreenWindow(if (sd.getFullScreenWindow == frame) null else frame)
         }
-       } else if (e.getKeyCode == KeyEvent.VK_Q) {
+      } else if (e.getKeyCode == KeyEvent.VK_Q) {
         sys.exit()
       }
     } else {
       e.getKeyCode match {
-        case KeyEvent.VK_A     => setRenderMode(false)  // enter adjustment mode
-//        case KeyEvent.VK_N     =>
-//          NORMALIZE = !NORMALIZE
-//          println(s"normalize = ${if (NORMALIZE) "on" else "off"}")
+        case KeyEvent.VK_A     => setRenderMode(RenderAdjust)  // enter adjustment mode
+        //        case KeyEvent.VK_N     =>
+        //          NORMALIZE = !NORMALIZE
+        //          println(s"normalize = ${if (NORMALIZE) "on" else "off"}")
         case KeyEvent.VK_ESCAPE =>
-          _previousAlgorithm = NUM_ALGORITHMS
-          _fadingAlgorithm   = NUM_ALGORITHMS
-          ALGORITHM         = NUM_ALGORITHMS
-          _currentRun        = _BUF_SIZE
-          nextEvent         = Long.MaxValue
-
-        case KeyEvent.VK_ENTER => startEvent()
-        case KeyEvent.VK_RIGHT =>
-          setAlgorithm((ALGORITHM + 1) % NUM_ALGORITHMS)
-          stopEvent()
-          println(s"algorithm = $ALGORITHM")
-        case KeyEvent.VK_LEFT  =>
-          setAlgorithm((ALGORITHM - 1 + NUM_ALGORITHMS) % NUM_ALGORITHMS)
-          stopEvent()
-          println(s"algorithm = $ALGORITHM")
-        case KeyEvent.VK_UP    =>
-          NOISE = math.min(0.9f, NOISE + 0.1f)
-          println(s"noise = $NOISE")
-          updateNoise()
-        case KeyEvent.VK_DOWN  =>
-          NOISE = math.max(0.0f, NOISE - 0.1f)
-          println(s"noise = $NOISE")
-        case KeyEvent.VK_1 if NUM_ALGORITHMS >= 1 => setAlgorithm(1 - 1); stopEvent()
-        case KeyEvent.VK_2 if NUM_ALGORITHMS >= 2 => setAlgorithm(2 - 1); stopEvent()
-        case KeyEvent.VK_3 if NUM_ALGORITHMS >= 3 => setAlgorithm(3 - 1); stopEvent()
-        case KeyEvent.VK_4 if NUM_ALGORITHMS >= 4 => setAlgorithm(4 - 1); stopEvent()
-        case KeyEvent.VK_5 if NUM_ALGORITHMS >= 5 => setAlgorithm(5 - 1); stopEvent()
-        case KeyEvent.VK_6 if NUM_ALGORITHMS >= 6 => setAlgorithm(6 - 1); stopEvent()
-        case KeyEvent.VK_7 if NUM_ALGORITHMS >= 7 => setAlgorithm(7 - 1); stopEvent()
-        case KeyEvent.VK_8 if NUM_ALGORITHMS >= 8 => setAlgorithm(8 - 1); stopEvent()
-        case KeyEvent.VK_9 if NUM_ALGORITHMS >= 9 => setAlgorithm(9 - 1); stopEvent()
-        case KeyEvent.VK_0                        => setAlgorithm(NUM_ALGORITHMS); stopEvent() // black
+          resetMode()
         case _ =>
       }
     }
+
+  private def keyPressedCam(e: pe.KeyEvent): Unit = {
+    handleStdKeys(e)
+    if (!e.isControlDown) e.getKeyCode match {
+      case KeyEvent.VK_A     => setRenderMode(RenderAdjust)  // enter adjustment mode
+//        case KeyEvent.VK_N     =>
+//          NORMALIZE = !NORMALIZE
+//          println(s"normalize = ${if (NORMALIZE) "on" else "off"}")
+//      case KeyEvent.VK_ESCAPE =>
+//        resetMode()
+
+      case KeyEvent.VK_ENTER =>
+        if (isStopped) {
+          startEvent()
+        } else {
+          stopEvent()
+          setRenderMode(RenderRay)
+        }
+
+      case KeyEvent.VK_RIGHT =>
+        setAlgorithm((ALGORITHM + 1) % NUM_ALGORITHMS)
+        stopEvent()
+        println(s"algorithm = $ALGORITHM")
+      case KeyEvent.VK_LEFT  =>
+        setAlgorithm((ALGORITHM - 1 + NUM_ALGORITHMS) % NUM_ALGORITHMS)
+        stopEvent()
+        println(s"algorithm = $ALGORITHM")
+      case KeyEvent.VK_UP    =>
+        NOISE = math.min(0.9f, NOISE + 0.1f)
+        println(s"noise = $NOISE")
+        updateNoise()
+      case KeyEvent.VK_DOWN  =>
+        NOISE = math.max(0.0f, NOISE - 0.1f)
+        println(s"noise = $NOISE")
+      case KeyEvent.VK_1 if NUM_ALGORITHMS >= 1 => setAlgorithm(1 - 1); stopEvent()
+      case KeyEvent.VK_2 if NUM_ALGORITHMS >= 2 => setAlgorithm(2 - 1); stopEvent()
+      case KeyEvent.VK_3 if NUM_ALGORITHMS >= 3 => setAlgorithm(3 - 1); stopEvent()
+      case KeyEvent.VK_4 if NUM_ALGORITHMS >= 4 => setAlgorithm(4 - 1); stopEvent()
+      case KeyEvent.VK_5 if NUM_ALGORITHMS >= 5 => setAlgorithm(5 - 1); stopEvent()
+      case KeyEvent.VK_6 if NUM_ALGORITHMS >= 6 => setAlgorithm(6 - 1); stopEvent()
+      case KeyEvent.VK_7 if NUM_ALGORITHMS >= 7 => setAlgorithm(7 - 1); stopEvent()
+      case KeyEvent.VK_8 if NUM_ALGORITHMS >= 8 => setAlgorithm(8 - 1); stopEvent()
+      case KeyEvent.VK_9 if NUM_ALGORITHMS >= 9 => setAlgorithm(9 - 1); stopEvent()
+      case KeyEvent.VK_0                        => setAlgorithm(NUM_ALGORITHMS); stopEvent() // black
+      case _ =>
+    }
+  }
 
   // def installFullScreenKey(frame: java.awt.Frame): Unit = this.frame = frame
 }
