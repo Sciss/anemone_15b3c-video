@@ -1,5 +1,5 @@
 name               := "anemone_15b3c-video"
-version            := "0.2.0-SNAPSHOT"
+version            := "0.2.0"
 organization       := "de.sciss"
 scalaVersion       := "2.11.8"
 description        := "Video sketch for the performance of the eponymous piece"

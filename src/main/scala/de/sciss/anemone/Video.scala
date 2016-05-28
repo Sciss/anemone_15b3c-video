@@ -14,7 +14,7 @@
 package de.sciss.anemone
 
 import java.awt.event.KeyEvent
-import java.awt.{Dimension, EventQueue}
+import java.awt.{Color, Dimension, EventQueue}
 import java.text.SimpleDateFormat
 import javax.swing.WindowConstants
 
@@ -113,6 +113,8 @@ final class Video(config: Video.Config) extends PApplet {
   private[this] val WINDOW_SIZE   = WINDOW_WIDTH * WINDOW_HEIGHT
   private[this] val _BUF_SIZE     = WINDOW_SIZE.nextPowerOfTwo
 
+  private[this] val MAX_VIDEO_FADE_FRAMES = 25 * 3
+
   def bufSize: Int = _BUF_SIZE
 
   private[this] val VIDEO_FIT_SCALE = {
@@ -157,27 +159,44 @@ final class Video(config: Video.Config) extends PApplet {
     def usesCam: Boolean
     def start(): Unit
     def stop(): Unit
+    def draw(): Unit
   }
   private case object RenderAdjust extends RenderMode {
     val usesCam = true
 
     def start() = ()
     def stop () = ()
+
+    def draw(): Unit = drawAdjustment()
   }
   private case object RenderCam extends RenderMode {
     val usesCam = true
     def start() = ()
     def stop () = ()
+
+    def draw(): Unit = {
+      renderCamFrame()
+      drawCam()
+    }
   }
-  private case object RenderPlay2 extends RenderMode {
+  private sealed trait VideoPlayRenderMode extends RenderMode {
+    def grab: FFmpegFrameGrabber
     val usesCam = false
-    def start(): Unit = grab2.start()
-    def stop (): Unit = grab2.stop()
+
+    def start(): Unit = {
+      resetVideoFade()
+      grab.start()
+    }
+
+    def stop (): Unit = grab.stop()
+
+    def draw(): Unit = drawVideoPlay(this)
   }
-  private case object RenderPlay1 extends RenderMode {
-    val usesCam = false
-    def start(): Unit = grab1.start()
-    def stop (): Unit = grab1.stop()
+  private case object RenderPlay2 extends VideoPlayRenderMode {
+    def grab = grab1
+  }
+  private case object RenderPlay1 extends VideoPlayRenderMode {
+    def grab = grab2
   }
 
   private[this] var renderMode      = RenderPlay2 /* RenderCam */: RenderMode // init must be different from `RenderCam`
@@ -529,36 +548,35 @@ final class Video(config: Video.Config) extends PApplet {
     noStroke()
     rect(0, 0, w, h)
     
-    renderMode match {
-      case RenderPlay2 =>
-        drawPlay2()
-      case RenderPlay1 =>
-        drawPlay1()
-      case RenderCam =>
-        renderCamFrame()
-        drawCam()
-      case RenderAdjust => 
-        drawAdjustment()
-    }
+    renderMode.draw()
   }
 
   private def red  (): Unit = stroke(0xFF, 0x00, 0x00)
   private def green(): Unit = stroke(0x00, 0xC0, 0x00)
 
-  private def drawPlay1(): Unit = drawFFmpeg(grab1)
-  private def drawPlay2(): Unit = drawFFmpeg(grab2)
+  private[this] var _haveWarnedVideoLoop = false
 
-  private def drawFFmpeg(grab: FFmpegFrameGrabber): Unit = if (grab != null) {
-    val frame0 = grab.grab()
-    val frame  = if (frame0 != null) frame0 else {
-      grab.restart()
-      val res = grab.grab()
-      if (res == null) {
+  private def drawVideoPlay(mode: VideoPlayRenderMode): Unit = if (mode.grab != null) {
+    var frame = mode.grab.grab()
+    if (frame == null && !_fadeVideo) {
+      mode.grab.restart()
+      frame = mode.grab.grab()
+      if (frame == null && !_haveWarnedVideoLoop) {
+        _haveWarnedVideoLoop = true
         println("Loop doesn't work??")
-        return
+        // return
       }
-      res
     }
+    if (frame == null) return
+
+    // this is ultra slow!
+//    val gamma = if (!_fadeVideo) 1.0 else {
+//      if (_fadeVideoFrames < MAX_VIDEO_FADE_FRAMES) {
+//        _fadeVideoFrames += 1
+//      }
+//      _fadeVideoFrames.linexp(0, MAX_VIDEO_FADE_FRAMES, 1.0, 10.0)
+//    }
+
     val img   = java2dFrameConv.getBufferedImage(frame, 1.0)
     // val imgP  = new PImage(img)
     val w     = getWidth
@@ -571,6 +589,19 @@ final class Video(config: Video.Config) extends PApplet {
     val g2 = this.g.asInstanceOf[PGraphicsJava2D].g2
     g2.drawImage(img, x, y, this)
     // image(imgP /* imgOut */, x, y)
+
+    if (_fadeVideo) {
+      if (_fadeVideoFrames < MAX_VIDEO_FADE_FRAMES) {
+        _fadeVideoFrames += 1
+      }
+      val alpha: Float = _fadeVideoFrames.linlin(0, MAX_VIDEO_FADE_FRAMES, 0f, 1f)
+      // don't go back to P5 now!
+//      fill(0, alpha)
+//      rect(0, 0, w, h)
+      val colr = new Color(0f, 0f, 0f, alpha)
+      g2.setColor(colr)
+      g2.fillRect(0, 0, w, h)
+    }
   }
 
   private def drawCam(): Unit = {
@@ -623,6 +654,8 @@ final class Video(config: Video.Config) extends PApplet {
       case KeyEvent.VK_LEFT  =>
         setRenderMode(RenderCam)
         startEvent()
+      case KeyEvent.VK_F =>
+        _fadeVideo = true
       case _ =>
     }
   }
@@ -630,7 +663,8 @@ final class Video(config: Video.Config) extends PApplet {
   private def keyPressedPlay2(e: pe.KeyEvent): Unit = {
     handleStdKeys(e)
     e.getKeyCode match {
-      case KeyEvent.VK_ENTER => // (End)
+      case KeyEvent.VK_ENTER | KeyEvent.VK_F => // (End)
+        _fadeVideo = true
       case KeyEvent.VK_LEFT  =>
         setRenderMode(RenderPlay1)
       case _ =>
@@ -682,12 +716,22 @@ final class Video(config: Video.Config) extends PApplet {
     clipFrames()
   }
 
+  private[this] var _fadeVideo = false
+
+  private[this] var _fadeVideoFrames = 0
+
+  private def resetVideoFade(): Unit = {
+    _fadeVideo          = false
+    _fadeVideoFrames    = 0
+  }
+
   private def resetMode(): Unit = {
     _previousAlgorithm  = NUM_ALGORITHMS
     _fadingAlgorithm    = NUM_ALGORITHMS
     ALGORITHM           = NUM_ALGORITHMS
     _currentRun         = _BUF_SIZE
     nextEvent           = Long.MaxValue
+    resetVideoFade()
     setRenderMode(RenderCam)
   }
 
